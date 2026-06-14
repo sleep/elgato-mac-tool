@@ -1,5 +1,7 @@
 # Elgato Mac Tool
 
+![UI](ui.png)
+
 Hardware-accelerated 1080p60 capture for Elgato (and other UVC) devices on macOS — built on AVFoundation and VideoToolbox. Ships a SwiftUI menu-bar app and a minimal CLI, sharing a single capture engine.
 
 Originally lived inside [obs-remote](https://github.com/) as `elgatomactool/`; extracted here as its own repo.
