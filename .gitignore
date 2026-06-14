@@ -1,8 +1,26 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Swift / SwiftPM
 .build/
-*.xcodeproj/xcuserdata/
+.swiftpm/
+Packages/
+*.xcodeproj
 *.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+xcuserdata/
 DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Editors
 *.swp
 *.swo
 *~
+.vscode/
+.idea/
