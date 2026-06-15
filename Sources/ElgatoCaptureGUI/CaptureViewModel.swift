@@ -78,6 +78,7 @@ final class CaptureViewModel: ObservableObject {
         // Seed sub-VM values from persisted settings BEFORE wiring didSet
         // callbacks so we don't fire feedback into a half-built engine.
         replay.replayDuration = settings.replayDuration
+        replay.saveDuration = settings.saveReplayDuration
         replay.maxReplayRAM = settings.maxReplayRAM
         recording.bitrateMbps = settings.bitrateMbps
         recording.captureCodec = settings.captureCodec
@@ -207,6 +208,12 @@ final class CaptureViewModel: ObservableObject {
             self.applyReplayLimits()
             self.settings?.replayDuration = newValue
             self.trimOldThumbnails()
+            // Save length tracks the buffer cap: when the buffer shrinks below
+            // an explicit save length, clamp it down so users can't request
+            // more than the buffer can hold.
+            if self.replay.saveDuration > 0 && self.replay.saveDuration > newValue {
+                self.replay.saveDuration = newValue
+            }
         }
 
         // Replay RAM cap
@@ -214,6 +221,11 @@ final class CaptureViewModel: ObservableObject {
             guard let self else { return }
             self.applyReplayLimits()
             self.settings?.maxReplayRAM = newValue
+        }
+
+        // Save length
+        replay.saveDurationChanged = { [weak self] newValue in
+            self?.settings?.saveReplayDuration = newValue
         }
 
         // Bitrate
@@ -605,10 +617,16 @@ final class CaptureViewModel: ObservableObject {
         }
     }
 
-    func saveReplay() {
+    /// Save the replay buffer. Pass an explicit length to override the user's
+    /// configured save length for this one save (e.g. status-bar "Last N" menu);
+    /// pass `nil` (default) to honour `replay.saveDuration`. A `0` save length is
+    /// the "full buffer" sentinel and maps to `nil` at the engine layer.
+    func saveReplay(lastSeconds override: Double? = nil) {
         replay.replaySaveFeedback = .inProgress
         recording.statusMessage = "Saving replay..."
-        engine.saveReplay(lastSeconds: replay.replayDuration) { [weak self] url in
+        let chosen = override ?? replay.saveDuration
+        let engineArg: Double? = chosen > 0 ? chosen : nil
+        engine.saveReplay(lastSeconds: engineArg) { [weak self] url in
             guard let self else { return }
             let success = url != nil
             self.replay.replaySaveFeedback = success ? .success : .failed

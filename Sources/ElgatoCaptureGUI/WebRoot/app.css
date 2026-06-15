@@ -271,6 +271,7 @@ html, body, #app { height: 100%; }
   transition: .15s;
 }
 .chip.active { color: var(--text); border-color: transparent; background: var(--grad); }
+.chip.disabled { opacity: .35; cursor: not-allowed; }
 .chip:active { transform: scale(.94); }
 
 .toggle-row {

@@ -15,9 +15,16 @@ struct ReplaySettingsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Replay Buffer")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("Buffer Length")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                if replay.isSaveDurationCustom {
+                    Text("· saving last \(ViewFormatters.formatDuration(replay.effectiveSaveDuration))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             // Duration presets grid
             HStack(spacing: 6) {

@@ -22,6 +22,14 @@ final class ReplayBufferVM: ObservableObject {
         didSet { maxReplayRAMChanged?(maxReplayRAM) }
     }
 
+    /// Length to write when Save Replay is triggered. `0` is the "full buffer"
+    /// sentinel — saves whatever the buffer currently contains, tracking it as
+    /// the buffer grows/shrinks. Otherwise should satisfy `0 < saveDuration <=
+    /// replayDuration`; the parent VM clamps it when `replayDuration` shrinks.
+    @Published var saveDuration: Double = 0 {
+        didSet { saveDurationChanged?(saveDuration) }
+    }
+
     // Visual artefacts
     @Published var replayThumbnails: [ReplayThumbnail] = []
 
@@ -32,4 +40,17 @@ final class ReplayBufferVM: ObservableObject {
     // Callbacks installed by CaptureViewModel.
     var replayDurationChanged: ((Double) -> Void)?
     var maxReplayRAMChanged: ((Int) -> Void)?
+    var saveDurationChanged: ((Double) -> Void)?
+
+    /// Effective save length given the current buffer cap. `0` is treated as "full
+    /// buffer" and returns `replayDuration`; any positive value is clamped to
+    /// `replayDuration` so the UI can't request more than the buffer can hold.
+    var effectiveSaveDuration: Double {
+        saveDuration <= 0 ? replayDuration : min(saveDuration, replayDuration)
+    }
+
+    /// True when the user has explicitly chosen a length shorter than the buffer.
+    var isSaveDurationCustom: Bool {
+        saveDuration > 0 && saveDuration < replayDuration
+    }
 }

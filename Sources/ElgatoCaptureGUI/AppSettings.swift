@@ -58,6 +58,7 @@ final class AppSettings: ObservableObject {
         static let autoStartCapture = "autoStartCapture"
         static let startMinimized = "startMinimized"
         static let replayDuration = "replayDuration"
+        static let saveReplayDuration = "saveReplayDuration"
         static let maxReplayRAM = "maxReplayRAM"
         static let bitrateMbps = "bitrateMbps"
         static let captureCodec = "captureCodec"
@@ -99,6 +100,13 @@ final class AppSettings: ObservableObject {
 
     @Published var replayDuration: Double {
         didSet { defaults.set(replayDuration, forKey: Keys.replayDuration) }
+    }
+
+    /// Length of the clip written to disk when Save Replay is triggered.
+    /// `0` means "use the full current buffer" (tracks the buffer as it grows/shrinks).
+    /// Otherwise must satisfy `0 < saveReplayDuration <= replayDuration`.
+    @Published var saveReplayDuration: Double {
+        didSet { defaults.set(saveReplayDuration, forKey: Keys.saveReplayDuration) }
     }
 
     @Published var maxReplayRAM: Int {
@@ -221,6 +229,7 @@ final class AppSettings: ObservableObject {
         self.autoStartCapture = defaults.object(forKey: Keys.autoStartCapture) as? Bool ?? true
         self.startMinimized = defaults.object(forKey: Keys.startMinimized) as? Bool ?? false
         self.replayDuration = defaults.object(forKey: Keys.replayDuration) as? Double ?? 30
+        self.saveReplayDuration = defaults.object(forKey: Keys.saveReplayDuration) as? Double ?? 0
         self.maxReplayRAM = defaults.object(forKey: Keys.maxReplayRAM) as? Int ?? 0
         self.bitrateMbps = defaults.object(forKey: Keys.bitrateMbps) as? Int ?? 20
         if let raw = defaults.string(forKey: Keys.captureCodec),

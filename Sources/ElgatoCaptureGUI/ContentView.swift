@@ -184,6 +184,7 @@ private struct ContentBody: View {
                             recording: recording,
                             replay: replay,
                             showReplaySettings: $showReplaySettings,
+                            replayPresets: CaptureViewModel.replayPresets,
                             onToggleRecording: { vm.toggleRecording() },
                             onScreenshot: { vm.takeScreenshot() },
                             onSaveReplay: { vm.saveReplay() },

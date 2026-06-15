@@ -185,6 +185,7 @@ final class RemoteController: ObservableObject {
             "settings": [
                 "bitrateMbps": vm.recording.bitrateMbps,
                 "replayDuration": vm.replay.replayDuration,
+                "saveReplayDuration": vm.replay.saveDuration,
                 "maxReplayRAM": vm.replay.maxReplayRAM,
                 "rememberLastDevice": settings.rememberLastDevice,
                 "autoStartCapture": settings.autoStartCapture,
@@ -269,6 +270,7 @@ final class RemoteController: ObservableObject {
         let vm = viewModel
         if let v = obj["bitrateMbps"] as? Int { vm.recording.bitrateMbps = v }
         if let v = obj["replayDuration"] as? NSNumber { vm.replay.replayDuration = v.doubleValue }
+        if let v = obj["saveReplayDuration"] as? NSNumber { vm.replay.saveDuration = v.doubleValue }
         if let v = obj["maxReplayRAM"] as? Int { vm.replay.maxReplayRAM = v }
         if let v = obj["rememberLastDevice"] as? Bool { settings.rememberLastDevice = v }
         if let v = obj["autoStartCapture"] as? Bool { settings.autoStartCapture = v }

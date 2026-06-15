@@ -8,6 +8,7 @@ struct RecordControlsView: View {
     @ObservedObject var recording: RecordingVM
     @ObservedObject var replay: ReplayBufferVM
     @Binding var showReplaySettings: Bool
+    let replayPresets: [Double]
     let onToggleRecording: () -> Void
     let onScreenshot: () -> Void
     let onSaveReplay: () -> Void
@@ -20,6 +21,7 @@ struct RecordControlsView: View {
             ReplayButton(
                 replay: replay,
                 showReplaySettings: $showReplaySettings,
+                replayPresets: replayPresets,
                 onSaveReplay: onSaveReplay,
                 estimatedSizeLabel: estimatedSizeLabel
             )
@@ -136,57 +138,53 @@ private struct ScreenshotButton: View {
     }
 }
 
-/// Save-replay button + settings disclosure chevron. Observes only ReplayBufferVM.
+/// Save-replay split button + settings disclosure chevron. Observes only ReplayBufferVM.
+///
+/// The save button is a `Menu(primaryAction:)`: primary click saves the last
+/// `replay.effectiveSaveDuration`; the dropdown lets the user pick a different
+/// length, which becomes the new sticky default *and* triggers an immediate
+/// save with that length.
 private struct ReplayButton: View {
     @ObservedObject var replay: ReplayBufferVM
     @Binding var showReplaySettings: Bool
+    let replayPresets: [Double]
     let onSaveReplay: () -> Void
     let estimatedSizeLabel: (Double) -> String
 
     private var isSuccess: Bool { replay.replaySaveFeedback == .success }
 
+    /// Presets short enough to fit in the current buffer. The buffer length
+    /// itself is always offered as "Full buffer" below, so anything `>=
+    /// replayDuration` is filtered out to avoid duplicates.
+    private var fittingPresets: [Double] {
+        replayPresets.filter { $0 < replay.replayDuration }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            Button(action: onSaveReplay) {
-                VStack(spacing: 2) {
-                    if replay.replaySaveFeedback == .success {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(.green)
-                        Text("Saved!")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.green)
-                    } else if replay.replaySaveFeedback == .failed {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(.red)
-                        Text("Failed")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.red)
-                    } else if replay.replaySaveFeedback == .inProgress {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(height: 20)
-                        Text("Saving...")
-                            .font(.system(size: 11, weight: .medium))
-                    } else {
-                        Image(systemName: "arrow.counterclockwise.circle.fill")
-                            .font(.system(size: 20))
-                        Text("Save Replay")
-                            .font(.system(size: 11, weight: .medium))
+            Menu(content: {
+                ForEach(fittingPresets, id: \.self) { seconds in
+                    Button {
+                        replay.saveDuration = seconds
+                        onSaveReplay()
+                    } label: {
+                        Text("Last \(ViewFormatters.formatDuration(seconds))  \(estimatedSizeLabel(seconds))")
                     }
-                    Text("\(ViewFormatters.formatDuration(replay.replayDuration))  \(estimatedSizeLabel(replay.replayDuration))")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text("Space")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(.green)
-                .frame(width: 90, height: 60)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(CapturePressButtonStyle())
+                Button {
+                    replay.saveDuration = 0  // sentinel: full buffer (tracks size)
+                    onSaveReplay()
+                } label: {
+                    Text("Full buffer (\(ViewFormatters.formatDuration(replay.replayDuration)))  \(estimatedSizeLabel(replay.replayDuration))")
+                }
+            }, label: {
+                replayButtonLabel
+            }, primaryAction: {
+                onSaveReplay()
+            })
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
             .disabled(replay.replaySaveFeedback == .inProgress)
 
             Divider()
@@ -214,5 +212,47 @@ private struct ReplayButton: View {
                 : AnyShapeStyle(.quaternary.opacity(0.5)),
             in: RoundedRectangle(cornerRadius: 8)
         )
+    }
+
+    @ViewBuilder
+    private var replayButtonLabel: some View {
+        VStack(spacing: 2) {
+            if replay.replaySaveFeedback == .success {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.green)
+                Text("Saved!")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.green)
+            } else if replay.replaySaveFeedback == .failed {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.red)
+                Text("Failed")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.red)
+            } else if replay.replaySaveFeedback == .inProgress {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(height: 20)
+                Text("Saving...")
+                    .font(.system(size: 11, weight: .medium))
+            } else {
+                Image(systemName: "arrow.counterclockwise.circle.fill")
+                    .font(.system(size: 20))
+                Text("Save Replay")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            let effective = replay.effectiveSaveDuration
+            Text("\(ViewFormatters.formatDuration(effective))  \(estimatedSizeLabel(effective))")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text("Space ▾")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .foregroundStyle(.green)
+        .frame(width: 90, height: 60)
+        .contentShape(Rectangle())
     }
 }

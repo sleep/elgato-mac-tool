@@ -272,6 +272,25 @@
       rc.appendChild(c);
     });
 
+    // Save-length chips. Same preset list but we only enable values that fit
+    // in the current buffer; "Full" is the 0 sentinel (= use whole buffer).
+    // Click a chip to set it as the new save length AND fire a save.
+    const sl = $('saveLenChips');
+    sl.innerHTML = '';
+    opt.replayPresets.forEach((v) => {
+      const c = document.createElement('div');
+      c.className = 'chip'; c.textContent = fmtReplay(v); c.dataset.v = v;
+      c.onclick = () => {
+        if (c.classList.contains('disabled')) return;
+        postSettings({ saveReplayDuration: v });
+      };
+      sl.appendChild(c);
+    });
+    const full = document.createElement('div');
+    full.className = 'chip'; full.textContent = 'Full'; full.dataset.v = 0;
+    full.onclick = () => postSettings({ saveReplayDuration: 0 });
+    sl.appendChild(full);
+
     // RAM select
     const ram = $('ramSelect');
     ram.innerHTML = '';
@@ -340,6 +359,18 @@
     $('replayVal').textContent = fmtReplay(cfg.replayDuration);
     markChips('bitrateChips', cfg.bitrateMbps);
     markChips('replayChips', cfg.replayDuration);
+
+    // Save length: 0 = "Full buffer" (tracks the buffer); positive = explicit.
+    const saveLen = Number(cfg.saveReplayDuration || 0);
+    $('saveLenVal').textContent = saveLen > 0 ? fmtReplay(saveLen) : 'Full buffer';
+    // Disable chips that won't fit in the current buffer.
+    $('saveLenChips').querySelectorAll('.chip').forEach((c) => {
+      const v = Number(c.dataset.v);
+      const fits = v === 0 || v <= cfg.replayDuration;
+      c.classList.toggle('disabled', !fits);
+      c.classList.toggle('active', v === saveLen);
+    });
+
     $('ramSelect').value = cfg.maxReplayRAM;
     $('tgRemember').checked = cfg.rememberLastDevice;
     $('tgAutostart').checked = cfg.autoStartCapture;
