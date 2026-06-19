@@ -60,7 +60,7 @@ final class CaptureViewModel: ObservableObject {
     private static let zeroFPSReconnectThreshold = 3
 
     /// Preset durations in seconds
-    static let replayPresets: [Double] = [15, 30, 60, 90, 120, 180, 300, 600]
+    static let replayPresets: [Double] = [15, 30, 60, 90, 120, 180, 300, 600, 1200, 1800]
 
     /// RAM cap options in bytes (0 = unlimited)
     static let ramPresets: [(label: String, bytes: Int)] = [
