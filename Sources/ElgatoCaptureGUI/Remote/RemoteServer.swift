@@ -223,7 +223,7 @@ final class RemoteServer: @unchecked Sendable {
         // the locked overlay until the API accepts the key.
         switch (request.method, request.path) {
         case ("GET", "/"), ("GET", "/index.html"):
-            return staticAsset("index.html")
+            return indexHTML(psk: psk)
         case ("GET", "/app.css"):
             return staticAsset("app.css")
         case ("GET", "/app.js"):
@@ -267,6 +267,25 @@ final class RemoteServer: @unchecked Sendable {
         default:
             return .text("Not found", status: 404)
         }
+    }
+
+    /// Serve index.html, injecting the access key into the manifest <link> so the
+    /// browser's *initial parse* fetches a keyed manifest. iOS reads start_url from
+    /// the manifest it fetches at parse / add-to-home-screen time — before app.js
+    /// can rewrite anything — so the key must already be in the served HTML.
+    private func indexHTML(psk: String?) -> HTTPResponse {
+        guard let asset = routes.asset("index.html") else {
+            return .text("Not found", status: 404)
+        }
+        guard let key = psk, !key.isEmpty,
+              let html = String(data: asset.data, encoding: .utf8) else {
+            return HTTPResponse(status: 200, contentType: asset.contentType, body: asset.data)
+        }
+        let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
+        let injected = html.replacingOccurrences(
+            of: "href=\"/manifest.webmanifest\"",
+            with: "href=\"/manifest.webmanifest?k=\(encoded)\"")
+        return HTTPResponse(status: 200, contentType: asset.contentType, body: Data(injected.utf8))
     }
 
     private func staticAsset(_ name: String) -> HTTPResponse {
