@@ -1,5 +1,5 @@
 /* Elgato Capture Remote — service worker for PWA / offline shell */
-const CACHE = 'capture-remote-v3';
+const CACHE = 'capture-remote-v4';
 const SHELL = [
   '/',
   '/app.css',

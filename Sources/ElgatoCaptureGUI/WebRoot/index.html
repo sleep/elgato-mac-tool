@@ -51,7 +51,6 @@
                 <div class="badge badge-rec hidden" id="recBadge"><span class="rec-dot"></span><span id="recTime">0:00</span></div>
                 <div class="badge badge-meta" id="resBadge"></div>
               </div>
-              <div class="preview-scanline"></div>
             </div>
           </div>
 
@@ -202,6 +201,26 @@
       </div>
     </div>
   </div>
+
+  <!-- Save Replay sheet -->
+  <div class="rsheet-backdrop hidden" id="replaySheet">
+    <div class="rsheet">
+      <div class="rsheet-handle"></div>
+      <div class="rsheet-head">
+        <span class="rsheet-title">Save Replay</span>
+        <span class="rsheet-buffer" id="replaySheetBuffer">—</span>
+      </div>
+      <div class="rsheet-label">Clip length</div>
+      <div class="chip-row rsheet-chips" id="replayLenChips"></div>
+      <div class="rsheet-actions">
+        <button class="btn-wide ghost" id="replayCancel">Cancel</button>
+        <button class="btn-wide solid" id="replaySave"><i class="f7-icons">gobackward</i> Save Clip</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save confirmations -->
+  <div class="toast-host" id="toastHost"></div>
 
   <!-- Locked screen -->
   <div class="locked-overlay hidden" id="lockedOverlay">

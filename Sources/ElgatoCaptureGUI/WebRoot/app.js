@@ -229,15 +229,19 @@
     $('val-disk').textContent = (s.system.diskFreeGB || 0).toFixed(0);
 
     if (s.history) {
-      drawSpark('spark-fps', s.history.fps, '#3ddc84');
-      drawSpark('spark-bitrate', null, '#00f5ff');
-      drawSpark('spark-cpu', s.history.cpu, '#00f5ff');
-      drawSpark('spark-gpu', s.history.gpu, '#9b6bff');
+      // Neutral graphite lines — health is signalled by the coloured stat value.
+      const line = '#b6b6be';
+      drawSpark('spark-fps', s.history.fps, line);
+      drawSpark('spark-bitrate', null, line);
+      drawSpark('spark-cpu', s.history.cpu, line);
+      drawSpark('spark-gpu', s.history.gpu, line);
     }
 
     // Status line
     if (s.errorMessage) { statusLine.textContent = s.errorMessage; statusLine.classList.add('error'); }
     else { statusLine.textContent = s.statusMessage || ''; statusLine.classList.remove('error'); }
+
+    syncSaveToast(s);
 
     if (!settingsBuilt) buildSettings(s);
     else syncSettings(s);
@@ -401,6 +405,98 @@
     });
   }
 
+  // --- Save Replay sheet ---
+  // Tapping Replay opens a sheet to pick a clip length. The length is sent as a
+  // one-shot override (cmd: replay, duration) so we don't touch the saved config.
+  let replayLen = 0; // 0 = full buffer
+  function openReplaySheet() {
+    const s = latest;
+    if (!s) return;
+    const buffered = (s.buffer && s.buffer.duration) || 0;
+    $('replaySheetBuffer').textContent = fmtReplay(buffered) + ' buffered';
+
+    // Default to the configured save length when it still fits, else full buffer.
+    const cfgLen = Number((s.settings && s.settings.saveReplayDuration) || 0);
+    replayLen = (cfgLen > 0 && cfgLen <= buffered) ? cfgLen : 0;
+
+    const wrap = $('replayLenChips');
+    wrap.innerHTML = '';
+    const presets = (s.options && s.options.replayPresets) || [];
+    // Offer preset lengths that fit in the current buffer, plus the full buffer.
+    presets.filter((v) => v <= buffered + 0.5).forEach((v) => addLenChip(wrap, v, fmtReplay(v)));
+    addLenChip(wrap, 0, buffered ? 'Full · ' + fmtReplay(buffered) : 'Full buffer');
+    markLenChips();
+
+    const el = $('replaySheet');
+    el.classList.remove('hidden');
+    requestAnimationFrame(() => el.classList.add('open'));
+  }
+  function addLenChip(wrap, v, label) {
+    const c = document.createElement('div');
+    c.className = 'chip'; c.textContent = label; c.dataset.v = v;
+    c.onclick = () => { replayLen = v; markLenChips(); };
+    wrap.appendChild(c);
+  }
+  function markLenChips() {
+    $('replayLenChips').querySelectorAll('.chip').forEach((c) => {
+      c.classList.toggle('active', Number(c.dataset.v) === Number(replayLen));
+    });
+  }
+  function closeReplaySheet() {
+    const el = $('replaySheet');
+    el.classList.remove('open');
+    setTimeout(() => el.classList.add('hidden'), 220);
+  }
+  function commitReplay() {
+    postAction({ cmd: 'replay', duration: replayLen });
+    closeReplaySheet();
+  }
+
+  // --- Save confirmations (mirror the Mac app's toast: name + size) ---
+  let lastSaveId; // undefined until first snapshot; then the id we've shown
+  const TOAST_META = {
+    replay:     { icon: 'gobackward',       label: 'Replay saved',     cls: 'ok' },
+    screenshot: { icon: 'camera_fill',      label: 'Screenshot saved', cls: 'ok' },
+    recording:  { icon: 'stop_circle_fill', label: 'Recording saved',  cls: 'rec' },
+  };
+  function fmtBytes(b) {
+    b = Number(b || 0);
+    if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB';
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB';
+    if (b >= 1e3) return Math.round(b / 1e3) + ' KB';
+    return b + ' B';
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function showToast(save) {
+    const meta = TOAST_META[save.kind] || TOAST_META.replay;
+    const card = document.createElement('div');
+    card.className = 'toast-card ' + meta.cls;
+    card.innerHTML =
+      `<i class="f7-icons toast-icon">${meta.icon}</i>` +
+      `<div class="toast-body">` +
+        `<div class="toast-title">${meta.label}</div>` +
+        `<div class="toast-file">${escapeHtml(save.filename || '')}</div>` +
+      `</div>` +
+      `<div class="toast-size">${fmtBytes(save.sizeBytes)}</div>`;
+    const host = $('toastHost');
+    host.appendChild(card);
+    requestAnimationFrame(() => card.classList.add('show'));
+    setTimeout(() => {
+      card.classList.remove('show');
+      setTimeout(() => card.remove(), 300);
+    }, 4200);
+  }
+  // Show a toast when a new save appears. First snapshot only primes the id so a
+  // pre-existing toast (e.g. saved before the page loaded) doesn't pop on open.
+  function syncSaveToast(s) {
+    const id = s.lastSave ? s.lastSave.id : null;
+    if (lastSaveId === undefined) { lastSaveId = id; return; }
+    if (id && id !== lastSaveId) { lastSaveId = id; showToast(s.lastSave); }
+  }
+
   // --- Wire static buttons ---
   $('settingsBtn').onclick = (e) => { e.preventDefault(); openSettings(); };
   document.querySelectorAll('.popup-close').forEach((el) => {
@@ -412,7 +508,12 @@
   };
   $('recordTile').onclick = () => postAction({ cmd: 'record' });
   $('screenshotTile').onclick = () => postAction({ cmd: 'screenshot' });
-  $('replayTile').onclick = () => postAction({ cmd: 'replay' });
+  $('replayTile').onclick = () => openReplaySheet();
+  $('replayCancel').onclick = closeReplaySheet;
+  $('replaySave').onclick = commitReplay;
+  $('replaySheet').addEventListener('click', (e) => {
+    if (e.target.id === 'replaySheet') closeReplaySheet(); // tap backdrop to dismiss
+  });
   $('passthroughTile').onclick = () => {
     if (!latest || !latest.hasAudio) return;
     postAction({ cmd: 'passthrough', on: !latest.passthrough });

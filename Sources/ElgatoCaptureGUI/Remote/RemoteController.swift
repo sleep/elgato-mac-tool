@@ -151,6 +151,22 @@ final class RemoteController: ObservableObject {
             }
         }
 
+        // The most recent saved file (screenshot / replay / recording), so the
+        // remote can show a confirmation card with name + size like the Mac app.
+        // Tracks the same toast the Mac UI shows; clears after its 15s window.
+        let lastSave: Any = vm.toast.current.map { t -> [String: Any] in
+            let kind: String
+            switch t.kind {
+            case .screenshot: kind = "screenshot"
+            case .replay: kind = "replay"
+            case .recording: kind = "recording"
+            }
+            return ["id": t.id.uuidString,
+                    "kind": kind,
+                    "filename": t.filename,
+                    "sizeBytes": t.sizeBytes]
+        } ?? NSNull()
+
         let snapshot: [String: Any] = [
             "capturing": vm.recording.isCapturing,
             "previewing": vm.recording.isPreviewing,
@@ -166,6 +182,7 @@ final class RemoteController: ObservableObject {
             "errorMessage": vm.recording.errorMessage.map { $0 as Any } ?? NSNull(),
             "screenshotFeedback": feedback(vm.replay.screenshotFeedback),
             "replayFeedback": feedback(vm.replay.replaySaveFeedback),
+            "lastSave": lastSave,
             "passthrough": vm.devices.audioPassthroughEnabled,
             "hasAudio": vm.stats.hasAudio,
             "audio": ["level": vm.stats.audioLevel, "peak": vm.stats.audioPeakLevel],
@@ -239,7 +256,13 @@ final class RemoteController: ObservableObject {
         case "screenshot":
             vm.takeScreenshot()
         case "replay":
-            vm.saveReplay()
+            // Optional one-shot clip length (seconds). Omitted / <= 0 honours the
+            // configured save length; we never mutate the persisted setting here.
+            if let d = (obj["duration"] as? NSNumber)?.doubleValue, d > 0 {
+                vm.saveReplay(lastSeconds: d)
+            } else {
+                vm.saveReplay()
+            }
         case "refresh":
             vm.refreshDevices()
         case "passthrough":
