@@ -9,6 +9,14 @@
 
   const withKey = (path) => path + (path.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(PSK);
 
+  // Stamp the key onto the manifest URL so the server bakes it into start_url.
+  // Without this, "Add to Home Screen" installs a PWA that launches at /?k=
+  // (keyless) — its sessionStorage is a separate context, so the key is lost.
+  if (PSK) {
+    const manifestLink = document.getElementById('manifest-link');
+    if (manifestLink) manifestLink.href = withKey('/manifest.webmanifest');
+  }
+
   // --- Framework7 app ---
   let app = null;
   try {
