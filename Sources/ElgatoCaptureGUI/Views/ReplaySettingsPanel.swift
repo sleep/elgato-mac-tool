@@ -102,7 +102,7 @@ struct ReplaySettingsPanel: View {
             // Current buffer status
             if recording.isCapturing {
                 HStack(spacing: 12) {
-                    Text("Buffer: \(String(format: "%.0fs", replay.bufferDuration)) / \(ViewFormatters.formatDuration(replay.replayDuration))")
+                    Text("Buffer: \(String(format: "%.0fs", replay.bufferDuration)) / \(String(format: "%.0fs", replay.replayDuration))")
                     Text("\(replay.bufferSizeMB) MB used")
                     if let ramCap = maxDurationForRAMCap() {
                         Text("RAM cap limits to \(ViewFormatters.formatDuration(ramCap))")

@@ -4,7 +4,7 @@ import IOKit
 
 struct SystemSample {
     let cpu: Double       // 0–N% (can exceed 100 on multi-core)
-    let ramMB: Double     // process resident memory in MB
+    let ramMB: Double     // process physical footprint in MB (Activity Monitor "Memory")
     let diskFreeGB: Double // free disk space in GB
     let gpu: Double       // 0–100% GPU utilization
 }
@@ -64,18 +64,23 @@ final class SystemStatsMonitor {
         return user + sys
     }
 
+    /// Physical memory footprint in MB — the same figure Activity Monitor reports
+    /// as "Memory". We use phys_footprint rather than resident_size because the
+    /// replay buffer holds multi-GB of no-copy, write-once encoded data that the
+    /// macOS memory compressor squeezes out of the resident set; resident_size
+    /// would hide it, phys_footprint charges the task for it.
     private static func residentMemoryMB() -> Double {
-        var info = mach_task_basic_info()
+        var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(
-            MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size
         )
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
         guard result == KERN_SUCCESS else { return 0 }
-        return Double(info.resident_size) / 1_048_576
+        return Double(info.phys_footprint) / 1_048_576
     }
 
     private static func diskFreeGB() -> Double {
