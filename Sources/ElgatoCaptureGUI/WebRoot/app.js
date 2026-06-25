@@ -264,15 +264,27 @@
     settingsBuilt = true;
     const opt = s.options;
 
-    // Bitrate chips
+    // Bitrate chips. The 0 sentinel = "Max" (constant-quality, no bitrate cap).
     const bc = $('bitrateChips');
     bc.innerHTML = '';
     opt.bitratePresets.forEach((v) => {
       const c = document.createElement('div');
-      c.className = 'chip'; c.textContent = v; c.dataset.v = v;
+      c.className = 'chip'; c.textContent = v === 0 ? 'Max' : v; c.dataset.v = v;
       c.onclick = () => postSettings({ bitrateMbps: v });
       bc.appendChild(c);
     });
+
+    // Resolution chips
+    const resc = $('resolutionChips');
+    if (resc && opt.resolutionPresets) {
+      resc.innerHTML = '';
+      opt.resolutionPresets.forEach((p) => {
+        const c = document.createElement('div');
+        c.className = 'chip'; c.textContent = p.label; c.dataset.v = p.id;
+        c.onclick = () => postSettings({ outputResolution: p.id });
+        resc.appendChild(c);
+      });
+    }
 
     // Replay chips
     const rc = $('replayChips');
@@ -367,10 +379,22 @@
     $('audioSelect').value = selAudio ? selAudio.id : 'none';
 
     const cfg = s.settings;
-    $('bitrateVal').textContent = cfg.bitrateMbps + ' Mbps';
+    $('bitrateVal').textContent = cfg.bitrateMbps === 0 ? 'Max' : cfg.bitrateMbps + ' Mbps';
     $('replayVal').textContent = fmtReplay(cfg.replayDuration);
     markChips('bitrateChips', cfg.bitrateMbps);
     markChips('replayChips', cfg.replayDuration);
+
+    // Resolution chips use string ids, so match by dataset directly.
+    const resEl = $('resolutionChips');
+    if (resEl) {
+      let resLabel = '';
+      resEl.querySelectorAll('.chip').forEach((c) => {
+        const on = c.dataset.v === cfg.outputResolution;
+        c.classList.toggle('active', on);
+        if (on) resLabel = c.textContent;
+      });
+      if ($('resolutionVal')) $('resolutionVal').textContent = resLabel;
+    }
 
     // Save length: 0 = "Full buffer" (tracks the buffer); positive = explicit.
     const saveLen = Number(cfg.saveReplayDuration || 0);

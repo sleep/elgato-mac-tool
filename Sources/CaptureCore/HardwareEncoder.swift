@@ -80,6 +80,57 @@ public enum CaptureCodec: String, CaseIterable, Identifiable, Codable, Sendable 
     }
 }
 
+/// Output resolution for the encode pipeline. The capture *source* is whatever
+/// the device delivers; this picks the dimensions the H.264/ProRes session
+/// encodes at. VideoToolbox scales the source frame to these dimensions during
+/// encode, so it covers both upscaling (e.g. 1080p source → 1440p output, the
+/// YouTube-reupload trick — YouTube allots higher-tier resolutions a much better
+/// codec) and downscaling (→ 720p for smaller files).
+public enum OutputResolution: String, CaseIterable, Identifiable, Codable, Sendable {
+    /// No scaling — encode at the source's native dimensions.
+    case native = "native"
+    case uhd2160 = "uhd2160"
+    case qhd1440 = "qhd1440"
+    case hd720 = "hd720"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .native: return "Native (match source)"
+        case .uhd2160: return "2160p / 4K (upscale)"
+        case .qhd1440: return "1440p (upscale)"
+        case .hd720: return "720p"
+        }
+    }
+
+    /// Target vertical resolution this tier scales to, or nil for native.
+    public var targetHeight: Int? {
+        switch self {
+        case .native: return nil
+        case .uhd2160: return 2160
+        case .qhd1440: return 1440
+        case .hd720: return 720
+        }
+    }
+
+    /// Encode dimensions for a given source size: the source aspect ratio scaled
+    /// so its height matches `targetHeight`, rounded to even values (H.264 macroblock
+    /// alignment requires even dimensions). Returns the source size unchanged for
+    /// `.native` or a degenerate source.
+    public func encodeDimensions(sourceWidth: Int32, sourceHeight: Int32) -> (Int32, Int32) {
+        guard let targetHeight, sourceWidth > 0, sourceHeight > 0 else {
+            return (sourceWidth, sourceHeight)
+        }
+        let scale = Double(targetHeight) / Double(sourceHeight)
+        var w = Int32((Double(sourceWidth) * scale).rounded())
+        var h = Int32(targetHeight)
+        if w % 2 != 0 { w += 1 }
+        if h % 2 != 0 { h += 1 }
+        return (max(w, 2), max(h, 2))
+    }
+}
+
 public struct EncodedFrame {
     public let data: Data
     public let isKeyframe: Bool
@@ -122,45 +173,78 @@ public struct AudioSample {
 public final class HardwareEncoder {
 
     private var session: VTCompressionSession?
-    private var width: Int32
-    private var height: Int32
+    /// Source frame dimensions (what the capture device delivers).
+    private var sourceWidth: Int32
+    private var sourceHeight: Int32
     private var fps: Int
+    /// `<= 0` means constant-quality mode (no bitrate target, encoder picks per-frame).
     private var bitrateMbps: Int
     private var bitrate: Int
     private(set) public var codec: CaptureCodec
+    private(set) public var outputResolution: OutputResolution
 
     public var onEncodedFrame: ((EncodedFrame) -> Void)?
 
     private let encoderQueue = DispatchQueue(label: "encoder", qos: .userInteractive)
 
-    public init(width: Int32 = 1920, height: Int32 = 1080, fps: Int = 60,
-                bitrateMbps: Int = 20, codec: CaptureCodec = .h264) {
-        self.width = width
-        self.height = height
-        self.fps = fps
-        self.bitrateMbps = bitrateMbps
-        self.bitrate = bitrateMbps * 1_000_000
-        self.codec = codec
+    /// True when the encoder should run H.264 in constant-quality mode rather than
+    /// targeting an average bitrate. Triggered by the "Max" bitrate preset (0 Mbps).
+    private var isConstantQuality: Bool { bitrateMbps <= 0 }
+
+    /// The dimensions the session actually encodes at — source scaled by `outputResolution`.
+    private var encodeDimensions: (width: Int32, height: Int32) {
+        outputResolution.encodeDimensions(sourceWidth: sourceWidth, sourceHeight: sourceHeight)
     }
 
-    /// Update dimensions before calling start(). Used when the actual device format differs from defaults.
-    public func updateDimensions(width: Int32, height: Int32, fps: Int) {
-        self.width = width
-        self.height = height
+    public init(width: Int32 = 1920, height: Int32 = 1080, fps: Int = 60,
+                bitrateMbps: Int = 20, codec: CaptureCodec = .h264,
+                outputResolution: OutputResolution = .native) {
+        self.sourceWidth = width
+        self.sourceHeight = height
         self.fps = fps
-        self.bitrate = bitrateMbps * 1_000_000
+        self.bitrateMbps = bitrateMbps
+        self.bitrate = max(bitrateMbps, 0) * 1_000_000
+        self.codec = codec
+        self.outputResolution = outputResolution
+    }
+
+    /// Update source dimensions before calling start(). Used when the actual device format differs from defaults.
+    public func updateDimensions(width: Int32, height: Int32, fps: Int) {
+        self.sourceWidth = width
+        self.sourceHeight = height
+        self.fps = fps
+        self.bitrate = max(bitrateMbps, 0) * 1_000_000
+    }
+
+    /// Stage the output resolution. Applied on the next start() — changing the
+    /// session's encode dimensions requires recreating it.
+    public func setOutputResolution(_ resolution: OutputResolution) {
+        outputResolution = resolution
     }
 
     /// Update the target bitrate. If encoding is active, applies immediately to the live session.
+    /// `mbps <= 0` selects constant-quality mode ("Max" preset). Switching *into* or *out of*
+    /// quality mode recreates the session, since average-bitrate vs constant-quality is fixed
+    /// at session-creation time and can't be toggled on a live session.
     /// No-op for codecs (ProRes) whose bitrate is fixed by profile + resolution + fps.
     public func updateBitrate(mbps: Int) {
+        let modeChanged = isConstantQuality != (mbps <= 0)
         bitrateMbps = mbps
-        bitrate = mbps * 1_000_000
+        bitrate = max(mbps, 0) * 1_000_000
         guard codec == .h264 else {
             print("[Encoder] Bitrate property ignored for \(codec.displayName) (rate is profile-fixed)")
             return
         }
-        guard let session else { return }
+        guard session != nil else { return }
+        if modeChanged {
+            // Quality <-> average-bitrate switch needs a fresh session.
+            try? start()
+            return
+        }
+        guard !isConstantQuality, let session else {
+            print("[Encoder] Constant-quality (Max) mode — no average-bitrate target")
+            return
+        }
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFTypeRef)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: [bitrate / 8 * 2, 1] as CFTypeRef)
         print("[Encoder] Bitrate updated to \(mbps)Mbps")
@@ -203,13 +287,15 @@ public final class HardwareEncoder {
             [:],  // No spec — use whatever's available
         ]
 
+        let (encWidth, encHeight) = encodeDimensions
+
         var status: OSStatus = -1
         var usedHW = "unknown"
         for (i, spec) in encoderSpecs.enumerated() {
             status = VTCompressionSessionCreate(
                 allocator: kCFAllocatorDefault,
-                width: width,
-                height: height,
+                width: encWidth,
+                height: encHeight,
                 codecType: codec.codecType,
                 encoderSpecification: spec as CFDictionary,
                 imageBufferAttributes: nil,
@@ -240,12 +326,20 @@ public final class HardwareEncoder {
             (kVTCompressionPropertyKey_AllowFrameReordering, false),
         ]
 
-        // H.264-specific: profile level + bitrate. ProRes ignores all of these —
+        // H.264-specific: profile level + rate control. ProRes ignores all of these —
         // its data rate is determined by profile + resolution + fps.
         if codec == .h264 {
-            properties.append((kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel))
-            properties.append((kVTCompressionPropertyKey_AverageBitRate, bitrate))
-            properties.append((kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8 * 2, 1] as [Int]))
+            properties.append((kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel))
+            if isConstantQuality {
+                // "Max" preset: constant-quality mode. No average-bitrate target and
+                // no data-rate cap — the encoder spends whatever bits the content needs.
+                // File size varies with motion. (Honored by the hardware H.264 encoder
+                // on recent macOS; where it isn't, the encoder falls back to its default.)
+                properties.append((kVTCompressionPropertyKey_Quality, 1.0))
+            } else {
+                properties.append((kVTCompressionPropertyKey_AverageBitRate, bitrate))
+                properties.append((kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8 * 2, 1] as [Int]))
+            }
         }
 
         for (key, value) in properties {
@@ -253,8 +347,9 @@ public final class HardwareEncoder {
         }
 
         VTCompressionSessionPrepareToEncodeFrames(session)
-        let rateLabel = codec == .h264 ? "\(bitrate/1_000_000)Mbps" : "lossless"
-        print("[Encoder] \(codec.displayName) encoder started (\(width)x\(height) @ \(fps)fps, \(rateLabel), \(usedHW))")
+        let rateLabel = codec == .h264 ? (isConstantQuality ? "max (constant quality)" : "\(bitrate/1_000_000)Mbps") : "lossless"
+        let scaleLabel = outputResolution == .native ? "" : " (scaled from \(sourceWidth)x\(sourceHeight))"
+        print("[Encoder] \(codec.displayName) encoder started (\(encWidth)x\(encHeight)\(scaleLabel) @ \(fps)fps, \(rateLabel), \(usedHW))")
     }
 
     public func encode(_ pixelBuffer: CVPixelBuffer, presentationTime: CMTime, duration: CMTime) {

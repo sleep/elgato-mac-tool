@@ -152,8 +152,10 @@ public final class CaptureEngine: NSObject {
     private var receivedFirstKeyframe = false
 
     public init(replayDuration: Double = 30, bitrateMbps: Int = 20,
-                codec: CaptureCodec = .h264) {
-        self.encoder = HardwareEncoder(bitrateMbps: bitrateMbps, codec: codec)
+                codec: CaptureCodec = .h264,
+                outputResolution: OutputResolution = .native) {
+        self.encoder = HardwareEncoder(bitrateMbps: bitrateMbps, codec: codec,
+                                       outputResolution: outputResolution)
         self.replayBuffer = ReplayBuffer(duration: replayDuration)
         self.recorder = Recorder()
         super.init()
@@ -170,6 +172,40 @@ public final class CaptureEngine: NSObject {
 
     /// Currently configured output codec.
     public var codec: CaptureCodec { encoder.codec }
+
+    /// Currently configured output (encode) resolution.
+    public var outputResolution: OutputResolution { encoder.outputResolution }
+
+    /// Change the output (encode) resolution. Behaves like a codec change: the
+    /// session's encode dimensions are fixed at creation, so the encoder is
+    /// restarted in place and the replay buffer is cleared (frames of different
+    /// resolutions carry incompatible SPS and can't be muxed into one file). Any
+    /// in-flight recording is finalized cleanly first.
+    public func setOutputResolution(_ resolution: OutputResolution) async {
+        guard resolution != encoder.outputResolution else { return }
+        let wasRunning = isRunning
+        if wasRunning {
+            encoder.stop()
+        }
+        if recorder.isRecording {
+            _ = await recorder.stopRecording()
+            DispatchQueue.main.async { self.onStateChange?() }
+        }
+        encoder.setOutputResolution(resolution)
+        replayBuffer.clear()
+        recordingFormatLock.lock()
+        recordingFormatDesc = nil
+        recordingFormatLock.unlock()
+        receivedFirstKeyframe = false
+        if wasRunning {
+            do {
+                try encoder.start()
+            } catch {
+                print("[Capture] Encoder restart after resolution change failed: \(error)")
+            }
+        }
+        print("[Capture] Output resolution set to \(resolution.displayName)")
+    }
 
     /// Switch the output codec. If capture is active the encoder is restarted
     /// in place; otherwise the codec is staged for the next start. Always

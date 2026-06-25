@@ -82,10 +82,12 @@ final class CaptureViewModel: ObservableObject {
         replay.maxReplayRAM = settings.maxReplayRAM
         recording.bitrateMbps = settings.bitrateMbps
         recording.captureCodec = settings.captureCodec
+        recording.outputResolution = settings.outputResolution
 
         self.engine = CaptureEngine(replayDuration: settings.replayDuration,
                                     bitrateMbps: settings.bitrateMbps,
-                                    codec: settings.captureCodec)
+                                    codec: settings.captureCodec,
+                                    outputResolution: settings.outputResolution)
         engine.setOutputDirectory(settings.outputDirectory)
 
         installSubVMCallbacks()
@@ -97,6 +99,29 @@ final class CaptureViewModel: ObservableObject {
                 guard let self else { return }
                 if self.recording.captureCodec != newCodec {
                     self.recording.captureCodec = newCodec
+                }
+            }
+            .store(in: &settingsCancellables)
+
+        // Mirror bitrate + output-resolution changes from the Preferences sheet
+        // (which binds settings directly) into the VM so they apply to the live
+        // engine, not just on next launch.
+        settings.$bitrateMbps
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newValue in
+                guard let self else { return }
+                if self.recording.bitrateMbps != newValue {
+                    self.recording.bitrateMbps = newValue
+                }
+            }
+            .store(in: &settingsCancellables)
+
+        settings.$outputResolution
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newRes in
+                guard let self else { return }
+                if self.recording.outputResolution != newRes {
+                    self.recording.outputResolution = newRes
                 }
             }
             .store(in: &settingsCancellables)
@@ -249,9 +274,29 @@ final class CaptureViewModel: ObservableObject {
                 await MainActor.run { [weak self] in self?.syncState() }
             }
         }
+
+        // Output resolution. Like a codec change, this restarts the encoder and
+        // clears the replay buffer (different encode dimensions can't be muxed
+        // into one file), so drop stale thumbnails too.
+        recording.outputResolutionChanged = { [weak self] newRes in
+            guard let self else { return }
+            self.settings?.outputResolution = newRes
+            self.replay.replayThumbnails = []
+            Task { [engine = self.engine] in
+                await engine.setOutputResolution(newRes)
+                await MainActor.run { [weak self] in self?.syncState() }
+            }
+        }
     }
 
     // MARK: - Estimates
+
+    /// Configured H.264 bitrate to assume for pre-capture estimates. The "Max"
+    /// preset (0 Mbps = constant quality) has no target, so fall back to a rough
+    /// high-bitrate guess until the live measurement takes over.
+    private var configuredBitrateForEstimate: Double {
+        recording.bitrateMbps > 0 ? Double(recording.bitrateMbps) : 120
+    }
 
     /// Estimated file size in MB for a given duration. Uses the live measured
     /// bitrate when capture is running (most accurate), falls back to the
@@ -264,7 +309,7 @@ final class CaptureViewModel: ObservableObject {
             let (w, h, fps) = currentResolutionForEstimate()
             mbps = recording.captureCodec.estimatedMbps(width: w, height: h, fps: fps)
         } else {
-            mbps = Double(recording.bitrateMbps)
+            mbps = configuredBitrateForEstimate
         }
         return mbps * seconds / 8.0
     }
@@ -299,7 +344,7 @@ final class CaptureViewModel: ObservableObject {
             let (w, h, fps) = currentResolutionForEstimate()
             mbps = recording.captureCodec.estimatedMbps(width: w, height: h, fps: fps)
         } else {
-            mbps = Double(recording.bitrateMbps)
+            mbps = configuredBitrateForEstimate
         }
         let bytesPerSecond = mbps * 1_000_000 / 8.0
         guard bytesPerSecond > 0 else { return nil }

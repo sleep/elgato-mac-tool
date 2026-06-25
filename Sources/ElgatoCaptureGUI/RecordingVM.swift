@@ -28,8 +28,15 @@ final class RecordingVM: ObservableObject {
             captureCodecChanged?(captureCodec)
         }
     }
+    @Published var outputResolution: OutputResolution = .native {
+        didSet {
+            guard outputResolution != oldValue else { return }
+            outputResolutionChanged?(outputResolution)
+        }
+    }
 
     // Callbacks installed by CaptureViewModel.
     var bitrateChanged: ((Int) -> Void)?
     var captureCodecChanged: ((CaptureCodec) -> Void)?
+    var outputResolutionChanged: ((OutputResolution) -> Void)?
 }

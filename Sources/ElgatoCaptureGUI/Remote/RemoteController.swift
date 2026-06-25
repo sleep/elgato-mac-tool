@@ -201,6 +201,7 @@ final class RemoteController: ObservableObject {
             "audioDevices": audioDevices,
             "settings": [
                 "bitrateMbps": vm.recording.bitrateMbps,
+                "outputResolution": vm.recording.outputResolution.rawValue,
                 "replayDuration": vm.replay.replayDuration,
                 "saveReplayDuration": vm.replay.saveDuration,
                 "maxReplayRAM": vm.replay.maxReplayRAM,
@@ -216,7 +217,8 @@ final class RemoteController: ObservableObject {
             "options": [
                 "replayPresets": CaptureViewModel.replayPresets,
                 "ramPresets": CaptureViewModel.ramPresets.map { ["label": $0.label, "bytes": $0.bytes] },
-                "bitratePresets": [5, 10, 15, 20, 30, 40, 50],
+                "bitratePresets": [5, 10, 15, 20, 30, 40, 50, 80, 120, 0],
+                "resolutionPresets": OutputResolution.allCases.map { ["id": $0.rawValue, "label": $0.displayName] },
                 "overlayStats": AppSettings.OverlayStat.allCases.map { ["id": $0.rawValue, "label": $0.label] },
                 "statusBarFields": AppSettings.StatusBarField.allCases.map { ["id": $0.rawValue, "label": $0.label] },
             ],
@@ -292,6 +294,8 @@ final class RemoteController: ObservableObject {
 
         let vm = viewModel
         if let v = obj["bitrateMbps"] as? Int { vm.recording.bitrateMbps = v }
+        if let v = obj["outputResolution"] as? String,
+           let res = OutputResolution(rawValue: v) { vm.recording.outputResolution = res }
         if let v = obj["replayDuration"] as? NSNumber { vm.replay.replayDuration = v.doubleValue }
         if let v = obj["saveReplayDuration"] as? NSNumber { vm.replay.saveDuration = v.doubleValue }
         if let v = obj["maxReplayRAM"] as? Int { vm.replay.maxReplayRAM = v }

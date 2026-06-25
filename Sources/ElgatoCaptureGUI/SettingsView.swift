@@ -107,12 +107,19 @@ struct SettingsView: View {
                             Text("Bitrate:")
                                 .foregroundStyle(.secondary)
                             Picker("", selection: $settings.bitrateMbps) {
-                                ForEach([5, 10, 15, 20, 30, 40, 50], id: \.self) { mbps in
+                                ForEach([5, 10, 15, 20, 30, 40, 50, 80, 120], id: \.self) { mbps in
                                     Text("\(mbps) Mbps").tag(mbps)
                                 }
+                                // 0 = constant-quality mode (no bitrate target).
+                                Text("Max (constant quality)").tag(0)
                             }
                             .labelsHidden()
-                            .frame(width: 120)
+                            .frame(width: 200)
+                        }
+                        if settings.bitrateMbps == 0 {
+                            Text("No bitrate cap — highest quality, larger files.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     } else {
                         // Lossless mode — explain the tradeoffs so file sizes
@@ -128,6 +135,25 @@ struct SettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                    }
+
+                    Divider().padding(.vertical, 2)
+
+                    HStack {
+                        Text("Resolution:")
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $settings.outputResolution) {
+                            ForEach(OutputResolution.allCases) { res in
+                                Text(res.displayName).tag(res)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
+                    if settings.outputResolution != .native {
+                        Text("Scales output from the source. Changing this clears the replay buffer.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(8)

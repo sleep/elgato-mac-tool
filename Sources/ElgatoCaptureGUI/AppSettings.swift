@@ -62,6 +62,7 @@ final class AppSettings: ObservableObject {
         static let maxReplayRAM = "maxReplayRAM"
         static let bitrateMbps = "bitrateMbps"
         static let captureCodec = "captureCodec"
+        static let outputResolution = "outputResolution"
         static let outputDirectoryPath = "outputDirectoryPath"
         static let statusBarFields = "statusBarFields"
         static let overlayStats = "overlayStats"
@@ -119,6 +120,11 @@ final class AppSettings: ObservableObject {
 
     @Published var captureCodec: CaptureCodec {
         didSet { defaults.set(captureCodec.rawValue, forKey: Keys.captureCodec) }
+    }
+
+    /// Resolution the encoder scales output to. `.native` = no scaling.
+    @Published var outputResolution: OutputResolution {
+        didSet { defaults.set(outputResolution.rawValue, forKey: Keys.outputResolution) }
     }
 
     @Published var outputDirectoryPath: String? {
@@ -237,6 +243,12 @@ final class AppSettings: ObservableObject {
             self.captureCodec = codec
         } else {
             self.captureCodec = .h264
+        }
+        if let raw = defaults.string(forKey: Keys.outputResolution),
+           let res = OutputResolution(rawValue: raw) {
+            self.outputResolution = res
+        } else {
+            self.outputResolution = .native
         }
         self.outputDirectoryPath = defaults.string(forKey: Keys.outputDirectoryPath)
 
