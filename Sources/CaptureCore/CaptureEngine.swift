@@ -15,6 +15,9 @@ public final class CaptureEngine: NSObject {
     public private(set) var recorder: Recorder
 
     private(set) public var latestPixelBuffer: CVPixelBuffer?
+    /// The most recent UNFILTERED camera frame, retained so the filter picker can
+    /// render alternative looks without disturbing the active effects chain.
+    private var latestRawPixelBuffer: CVPixelBuffer?
     private let latestFrameLock = NSLock()
     private let thumbnailContext = CIContext(options: [.useSoftwareRenderer: false])
 
@@ -776,6 +779,27 @@ public final class CaptureEngine: NSObject {
         return thumbnailContext.createCGImage(scaled, from: scaled.extent)
     }
 
+    /// Render the latest UNFILTERED frame through an arbitrary CIFilter chain and
+    /// return a scaled thumbnail. Used by the live filter picker to show every
+    /// preset side-by-side. Pass an empty `filters` array for the raw look.
+    /// Thread-safe — designed to be called from a background queue.
+    public func renderFilterPreview(maxWidth: CGFloat, filters: [CIFilter]) -> CGImage? {
+        latestFrameLock.lock()
+        let pb = latestRawPixelBuffer
+        latestFrameLock.unlock()
+        guard let pb else { return nil }
+
+        var ci = CIImage(cvPixelBuffer: pb)
+        for filter in filters {
+            filter.setValue(ci, forKey: kCIInputImageKey)
+            guard let output = filter.outputImage else { return nil }
+            ci = output
+        }
+        let scale = maxWidth / ci.extent.width
+        let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return thumbnailContext.createCGImage(scaled, from: scaled.extent)
+    }
+
     // MARK: - Private
 
     private func handleEncodedFrame(_ frame: EncodedFrame) {
@@ -995,6 +1019,7 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
 
         latestFrameLock.lock()
         latestPixelBuffer = pixelBuffer
+        latestRawPixelBuffer = rawPixelBuffer
         latestFrameLock.unlock()
 
         // Only display after the first keyframe to avoid green artifacts
