@@ -55,12 +55,18 @@
   const actionsGrid = $('actionsGrid');
   const audioRow = $('audioRow');
   const audioFill = $('audioFill');
+  const audioPeakEl = $('audioPeak');
   const statusLine = $('statusLine');
   const lockedOverlay = $('lockedOverlay');
 
   let latest = null;
   let settingsBuilt = false;
   let online = true;
+
+  // Client-side bitrate history so its card shows a real scope like its siblings
+  // (the backend doesn't ship a bitrate series). Peak-hold state for the meter.
+  const bitrateHist = [];
+  let meterPeak = 0, meterPeakAt = 0;
 
   // --- API helpers ---
   async function getState() {
@@ -120,17 +126,33 @@
     const ctx = cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+
+    // Faint baseline so an empty/idle card still reads as an instrument scope.
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, h - 0.5); ctx.lineTo(w, h - 0.5); ctx.stroke();
+
     if (!data || data.length < 2) return;
 
-    const max = Math.max(1, ...data);
-    const min = Math.min(0, ...data);
-    const range = max - min || 1;
+    // Auto-range to the data's OWN min/max (with padding) rather than anchoring
+    // to zero. A steady signal (e.g. 60 fps) then reads as a calm centred line,
+    // not a 40%-opacity fill flooding the whole card.
+    let lo = Math.min(...data), hi = Math.max(...data);
+    if (hi - lo < 1e-6) { lo -= 1; hi += 1; } // flatline → centre it
+    const pad = (hi - lo) * 0.18; lo -= pad; hi += pad;
+    // Minimum span relative to magnitude, so a steady signal (60 fps with sub-fps
+    // jitter) reads as a calm near-flat line instead of a noise-amplified zigzag;
+    // genuinely varying metrics keep their full detail.
+    const minSpan = Math.max(1, hi * 0.45);
+    if (hi - lo < minSpan) { const mid = (lo + hi) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; }
+    const range = hi - lo;
     const step = w / (data.length - 1);
-    const y = (v) => h - ((v - min) / range) * (h - 3) - 1.5;
+    const top = 3, bot = h - 3;
+    const y = (v) => bot - ((v - lo) / range) * (bot - top);
 
-    // fill
+    // Subtle fill under the line.
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, color + '66');
+    grad.addColorStop(0, color + '24');
     grad.addColorStop(1, color + '00');
     ctx.beginPath();
     ctx.moveTo(0, h);
@@ -140,12 +162,13 @@
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // line
+    // Line.
     ctx.beginPath();
     data.forEach((v, i) => { i ? ctx.lineTo(i * step, y(v)) : ctx.moveTo(0, y(v)); });
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.6;
     ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.stroke();
   }
 
@@ -214,13 +237,22 @@
     pt.classList.toggle('disabled', !s.hasAudio);
     $('passthroughIcon').textContent = s.passthrough ? 'speaker_2_fill' : 'speaker_slash_fill';
 
-    // Audio meter
-    const peak = (s.audio && s.audio.peak) || 0;
-    audioFill.style.width = Math.min(100, Math.round(peak * 100)) + '%';
+    // Audio meter — instant level, plus a peak-hold tick that decays.
+    const peak = Math.max(0, Math.min(1, (s.audio && s.audio.peak) || 0));
+    audioFill.style.width = Math.round(peak * 100) + '%';
+    if (audioPeakEl) {
+      const now = Date.now();
+      if (peak >= meterPeak) { meterPeak = peak; meterPeakAt = now; }
+      else if (now - meterPeakAt > 1100) { meterPeak = Math.max(peak, meterPeak - 0.08); }
+      audioPeakEl.style.left = 'calc(' + Math.round(meterPeak * 100) + '% - 1px)';
+      audioPeakEl.classList.toggle('on', meterPeak > 0.02);
+    }
 
     // Stats
     setStat('fps', (s.fps || 0).toFixed(0), s.fps >= 55 ? '' : s.fps >= 30 ? 'warn' : 'bad');
     setStat('bitrate', (s.bitrate || 0).toFixed(1), '', 'mbps');
+    bitrateHist.push(s.bitrate || 0);
+    if (bitrateHist.length > 60) bitrateHist.shift();
     setStat('buffer', Math.round(s.buffer.duration), '', 's');
     $('sub-buffer').textContent = s.buffer.sizeMB + ' MB · ' + s.buffer.frames + 'f';
     setStat('cpu', (s.system.cpu || 0).toFixed(0), s.system.cpu > 85 ? 'bad' : s.system.cpu > 60 ? 'warn' : '', '%');
@@ -228,11 +260,11 @@
     $('val-ram').textContent = fmtRam(s.system.ramMB);
     $('val-disk').textContent = (s.system.diskFreeGB || 0).toFixed(0);
 
+    // Neutral graphite lines — health is signalled by the coloured stat value.
+    const line = '#b6b6be';
+    drawSpark('spark-bitrate', bitrateHist.length > 1 ? bitrateHist : null, line);
     if (s.history) {
-      // Neutral graphite lines — health is signalled by the coloured stat value.
-      const line = '#b6b6be';
       drawSpark('spark-fps', s.history.fps, line);
-      drawSpark('spark-bitrate', null, line);
       drawSpark('spark-cpu', s.history.cpu, line);
       drawSpark('spark-gpu', s.history.gpu, line);
     }
