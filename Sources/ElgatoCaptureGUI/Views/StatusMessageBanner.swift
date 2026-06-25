@@ -17,7 +17,9 @@ struct StatusMessageBanner: View {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-        } else if !recording.statusMessage.isEmpty {
+        // Device name already shows in the left dropdown, so the steady "Capturing
+        // from …" message is hidden here; transient statuses + errors still show.
+        } else if !recording.statusMessage.isEmpty && !recording.statusMessage.hasPrefix("Capturing from") {
             Text(recording.statusMessage)
                 .foregroundStyle(.secondary)
                 .font(.caption)

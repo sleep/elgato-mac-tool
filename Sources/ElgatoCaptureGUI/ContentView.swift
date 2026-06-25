@@ -34,6 +34,7 @@ private struct ContentBody: View {
     @ObservedObject var remote: RemoteController
     @ObservedObject var toast: ToastVM
     @State private var showReplaySettings = false
+    @State private var bottomTab: BottomTab = .frames
     @State private var showRemote = false
     @State private var isFullscreen = false
 
@@ -171,12 +172,7 @@ private struct ContentBody: View {
                         onStopCapture: { vm.stopCapture() }
                     )
 
-                    if recording.isCapturing && !replay.replayThumbnails.isEmpty {
-                        ReplayThumbnailStrip(replay: replay)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    } else {
-                        Spacer()
-                    }
+                    Spacer()
 
                     // Right: action buttons or Start Capture
                     if recording.isCapturing {
@@ -207,6 +203,16 @@ private struct ContentBody: View {
                         ramPresets: CaptureViewModel.ramPresets,
                         estimatedSizeLabel: { vm.estimatedSizeLabel(forSeconds: $0) },
                         maxDurationForRAMCap: { vm.maxDurationForRAMCap() }
+                    )
+                }
+
+                if recording.isCapturing {
+                    BottomTabPanel(
+                        selection: $bottomTab,
+                        settings: settings,
+                        replay: replay,
+                        recording: recording,
+                        engine: vm.engine
                     )
                 }
 
