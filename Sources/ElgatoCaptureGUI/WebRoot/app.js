@@ -21,7 +21,14 @@
   let app = null;
   try {
     if (window.Framework7) {
-      app = new Framework7({ el: '#app', theme: 'ios', darkMode: true });
+      // iosDynamicNavbar:false keeps the navbar inside the page in normal flow.
+      // Otherwise F7 hoists it into an absolutely-positioned .navbars layer whose
+      // height (taller than F7's default clearance) lets page content scroll up
+      // underneath the header. Our layout wants the navbar as an in-flow header.
+      app = new Framework7({
+        el: '#app', theme: 'ios', darkMode: true,
+        view: { iosDynamicNavbar: false },
+      });
     }
   } catch (e) { /* controls still work without F7 */ }
 

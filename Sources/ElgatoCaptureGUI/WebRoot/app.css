@@ -69,11 +69,16 @@ html, body, #app { height: 100%; }
   height: 100%; overflow: hidden; background: transparent;
 }
 .navbar { position: relative !important; z-index: 10; }
-.navbar .navbar-inner { position: relative !important; height: auto; }
+/* Framework7 forces height:100% on .navbar-inner, which collapses to 0 inside our
+   flex navbar — the bar then reserves no space and content scrolls under it.
+   Force the inner to size to its own content so the navbar has real height. */
+.navbar .navbar-inner { position: relative !important; height: auto !important; }
 .page-content {
   position: relative !important; top: auto !important; bottom: auto !important;
   height: auto !important; flex: 1 1 auto; overflow-y: auto;
   -webkit-overflow-scrolling: touch; background: transparent;
+  /* The navbar is in normal flow, so F7's navbar-clearance padding is dead space. */
+  padding-top: 0 !important;
 }
 
 /* ---- Navbar ---- */
