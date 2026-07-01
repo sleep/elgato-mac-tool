@@ -291,24 +291,74 @@ public final class CaptureEngine: NSObject {
         }
     }
 
-    /// Configure device format if needed. Shared by preview and full capture.
+    /// Configure device format and frame rate. Shared by preview and full capture.
+    ///
+    /// We ALWAYS pin the frame duration, even when reusing the device's active
+    /// format. UVC capture cards like the HD60X advertise several discrete frame
+    /// rates (25/30/50/60/120) on one format; if we don't explicitly select one,
+    /// the macOS UVC driver negotiates the slowest (~25fps) and the device stays
+    /// there until re-enumerated. This is exactly what made us run at 25fps until
+    /// Elgato's own app opened the device and pinned 60 — pinning min==max here
+    /// locks a stable target rate the same way, up front.
     private func configureDevice(_ device: AVCaptureDevice, format: AVCaptureDevice.Format, targetFPS: Double) {
         let needsFormatChange = format !== device.activeFormat
         print("[Capture] Format change needed: \(needsFormatChange)")
-
         if needsFormatChange {
-            let timescale = CMTimeScale(max(targetFPS, 1))
             do {
                 try device.lockForConfiguration()
                 device.activeFormat = format
-                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: timescale)
-                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: timescale)
                 device.unlockForConfiguration()
             } catch {
                 print("[Capture] lockForConfiguration failed: \(error) — proceeding with current config")
             }
-        } else {
-            print("[Capture] Skipping device config (already using active format)")
+        }
+        // Pin the frame rate here too, but note it must be RE-pinned after
+        // startRunning — starting the session renegotiates the UVC frame interval
+        // back to the device default (~25fps on the HD60X). See pinFrameRate.
+        pinFrameRate(on: device, targetFPS: targetFPS)
+    }
+
+    /// Lock the device to a fixed frame rate.
+    ///
+    /// Two subtleties, both learned the hard way on the HD60X:
+    ///  1. We reuse the advertised range's OWN minFrameDuration verbatim. Building
+    ///     1/targetFPS ourselves fails: this device's "60fps" is really
+    ///     1000000/60000240 (≈60.00024fps), so an exact CMTime(1, 60) isn't in the
+    ///     supported set and setActiveVideoMinFrameDuration throws an *NSException*
+    ///     (uncatchable by Swift do/catch → hard crash).
+    ///  2. This must be called AFTER captureSession.startRunning(). Pinning before
+    ///     the session starts gets reset when the session negotiates the stream, so
+    ///     the device falls back to its slowest rate (25fps). Calling it again once
+    ///     the session is live is what actually sticks — this is effectively what
+    ///     Elgato's own app does that we weren't.
+    private func pinFrameRate(on device: AVCaptureDevice, targetFPS: Double) {
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges
+        guard let target = ranges.min(by: {
+            abs($0.maxFrameRate - targetFPS) < abs($1.maxFrameRate - targetFPS)
+        }) else { return }
+
+        func fps(_ t: CMTime) -> Double { t.isValid && t.value != 0 ? Double(t.timescale) / Double(t.value) : 0 }
+        print("[Capture][diag] BEFORE pin: activeFormat ranges=\(ranges.map { String(format: "%.3f", $0.maxFrameRate) }), " +
+              "min=\(String(format: "%.3f", fps(device.activeVideoMinFrameDuration)))fps, " +
+              "max=\(String(format: "%.3f", fps(device.activeVideoMaxFrameDuration)))fps")
+
+        do {
+            try device.lockForConfiguration()
+            // Lock a fixed cadence (min==max) so the encoder/muxer get a steady rate
+            // and the device doesn't auto-throttle under load. minFrameDuration is the
+            // shortest frame time = the range's fastest (and, for these discrete
+            // ranges, only) rate.
+            device.activeVideoMinFrameDuration = target.minFrameDuration
+            device.activeVideoMaxFrameDuration = target.minFrameDuration
+            device.unlockForConfiguration()
+            // Read the values back: this distinguishes "API rejected/ignored our set"
+            // from "API accepted it but the device still delivers 25fps" (driver
+            // ignores frame-duration control → we'd need a different lever).
+            print("[Capture][diag] AFTER pin: tried \(String(format: "%.3f", target.maxFrameRate))fps → " +
+                  "min=\(String(format: "%.3f", fps(device.activeVideoMinFrameDuration)))fps, " +
+                  "max=\(String(format: "%.3f", fps(device.activeVideoMaxFrameDuration)))fps")
+        } catch {
+            print("[Capture] Frame-rate pin failed: \(error)")
         }
     }
 
@@ -472,7 +522,13 @@ public final class CaptureEngine: NSObject {
         captureSession.commitConfiguration()
 
         captureSession.startRunning()
+        // Re-pin AFTER startRunning — starting the session resets the negotiated
+        // UVC frame interval back to the device default (25fps on the HD60X).
+        pinFrameRate(on: device, targetFPS: targetFPS)
         isPreviewing = true
+        // Hold the priority boost for preview too, not just full capture — otherwise
+        // macOS throttles the live feed once the app is backgrounded behind a game.
+        beginCaptureActivityIfNeeded()
         print("[Preview] Live preview running")
     }
 
@@ -488,6 +544,7 @@ public final class CaptureEngine: NSObject {
         stopPassthrough()
         isPreviewing = false
         self.device = nil
+        endCaptureActivity()
         print("[Preview] Stopped")
     }
 
@@ -547,6 +604,8 @@ public final class CaptureEngine: NSObject {
             try encoder.start()
 
             captureSession.startRunning()
+            // Re-pin AFTER startRunning — see pinFrameRate.
+            pinFrameRate(on: device, targetFPS: targetFPS)
         } else {
             // Upgrade from preview: add output + encoder while session is running
             print("[Capture] Upgrading preview to full capture")
@@ -570,6 +629,10 @@ public final class CaptureEngine: NSObject {
             captureSession.addOutput(output)
             captureSession.commitConfiguration()
 
+            // Session is already running — re-pin now that reconfiguration is
+            // committed (this path previously never pinned the rate at all).
+            pinFrameRate(on: device, targetFPS: targetFPS)
+
             encoder.updateDimensions(width: dims.width, height: dims.height, fps: Int(targetFPS))
             try encoder.start()
         }
@@ -580,12 +643,7 @@ public final class CaptureEngine: NSObject {
 
         // Prevent macOS from throttling this process when backgrounded.
         // Without this, AVCaptureSession stops delivering frames to non-frontmost apps.
-        if captureActivity == nil {
-            captureActivity = ProcessInfo.processInfo.beginActivity(
-                options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
-                reason: "Video capture pipeline active"
-            )
-        }
+        beginCaptureActivityIfNeeded()
 
         print("[Capture] Pipeline running")
     }
@@ -593,11 +651,6 @@ public final class CaptureEngine: NSObject {
     /// Stop the full capture pipeline. If the device is still available, falls back
     /// to preview-only mode so the user keeps seeing the video feed.
     public func stop() {
-        if let activity = captureActivity {
-            ProcessInfo.processInfo.endActivity(activity)
-            captureActivity = nil
-        }
-
         let wasDevice = device
         encoder.stop()
 
@@ -613,12 +666,38 @@ public final class CaptureEngine: NSObject {
         // Fall back to preview if we still have a device input
         if wasDevice != nil && !captureSession.inputs.isEmpty {
             isPreviewing = true
-            // Session is still running — preview layer continues to show video
+            // Session is still live — keep the priority boost so the preview feed
+            // stays un-throttled while backgrounded.
             print("[Capture] Stopped capture, fell back to preview")
         } else {
             captureSession.stopRunning()
             isPreviewing = false
+            endCaptureActivity()
             print("[Capture] Stopped capture and preview")
+        }
+    }
+
+    // MARK: - Priority boost (Game-Mode-equivalent)
+
+    /// Opt the process out of App Nap / timer throttling and system idle-sleep for the
+    /// full lifetime of a live session (preview or full capture). This is the
+    /// supported-API equivalent of macOS Game Mode's priority elevation, and is what
+    /// keeps AVCaptureSession delivering frames while the app is backgrounded behind a
+    /// fullscreen game. Idempotent — safe to call on every session start.
+    private func beginCaptureActivityIfNeeded() {
+        guard captureActivity == nil else { return }
+        captureActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
+            reason: "Elgato capture session active"
+        )
+    }
+
+    /// Release the priority boost. Called only when the engine goes fully idle
+    /// (no live preview and no capture).
+    private func endCaptureActivity() {
+        if let activity = captureActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            captureActivity = nil
         }
     }
 

@@ -230,8 +230,10 @@ public final class Recorder {
             // Drive each input from its own queue. Apple's `requestMediaDataWhenReady` is
             // pull-based: it calls back when the input is ready and we feed as much as we can.
             // Running video and audio on separate queues lets the writer interleave properly.
-            let videoQueue = DispatchQueue(label: "elgato.replay.write.video")
-            let audioQueue = DispatchQueue(label: "elgato.replay.write.audio")
+            // .userInitiated so replay saves aren't throttled while the app is
+            // backgrounded behind a fullscreen game — the moment they matter most.
+            let videoQueue = DispatchQueue(label: "elgato.replay.write.video", qos: .userInitiated)
+            let audioQueue = DispatchQueue(label: "elgato.replay.write.audio", qos: .userInitiated)
 
             // Watchdog timeout for finishWriting. If finalisation hangs (disk stall, FUSE
             // wedge, sandbox glitch), we cancel the writer and resume with failure rather
