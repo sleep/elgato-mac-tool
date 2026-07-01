@@ -24,19 +24,42 @@ public enum DeviceDiscovery {
         return discovery.devices
     }
 
-    /// Returns the first Elgato device, or falls back to any external capture device.
-    public static func findElgato() -> AVCaptureDevice? {
-        let devices = findCaptureDevices()
+    /// Brand keywords for known HDMI/UVC capture hardware we prefer to auto-select.
+    public static let captureDeviceKeywords = [
+        "elgato", "cam link", "hd60", "4k60", "game capture", "hagibis",
+    ]
 
-        let elgatoKeywords = ["elgato", "cam link", "hd60", "4k60"]
-        if let elgato = devices.first(where: { device in
+    /// Substrings identifying virtual or built-in cameras that are almost never the
+    /// capture card the user wants auto-selected. Used only to steer the fallback —
+    /// they're still listed and selectable in the picker.
+    public static let nonCaptureDeviceKeywords = [
+        "obs virtual", "virtual camera", "facetime", "continuity", "desk view",
+    ]
+
+    /// Pick the best capture device from a set of discovered devices:
+    ///   1. Known capture hardware matched by name.
+    ///   2. Otherwise any device that isn't a known virtual/built-in camera — this
+    ///      is what auto-detects arbitrarily-named HDMI capture cards (Hagibis, etc.).
+    ///   3. Otherwise the first device.
+    public static func preferredCaptureDevice(from devices: [AVCaptureDevice]) -> AVCaptureDevice? {
+        if let known = devices.first(where: { device in
             let name = device.localizedName.lowercased()
-            return elgatoKeywords.contains(where: { name.contains($0) })
+            return captureDeviceKeywords.contains(where: { name.contains($0) })
         }) {
-            return elgato
+            return known
         }
-
+        if let external = devices.first(where: { device in
+            let name = device.localizedName.lowercased()
+            return !nonCaptureDeviceKeywords.contains(where: { name.contains($0) })
+        }) {
+            return external
+        }
         return devices.first
+    }
+
+    /// Returns the preferred capture device (Elgato or any other HDMI/UVC card).
+    public static func findElgato() -> AVCaptureDevice? {
+        return preferredCaptureDevice(from: findCaptureDevices())
     }
 
     /// Prints ALL formats for all devices (for debugging).

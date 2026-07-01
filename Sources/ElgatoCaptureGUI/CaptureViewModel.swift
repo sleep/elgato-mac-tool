@@ -488,14 +488,9 @@ final class CaptureViewModel: ObservableObject {
     }
 
     private func autoSelectDevice() -> AVCaptureDevice? {
-        let keywords = ["elgato", "cam link", "hd60", "4k60", "game capture"]
-        if let match = devices.availableDevices.first(where: { device in
-            let name = device.localizedName.lowercased()
-            return keywords.contains(where: { name.contains($0) })
-        }) {
-            return match
-        }
-        return devices.availableDevices.first
+        // Single source of truth for capture-device preference (see DeviceDiscovery),
+        // so the GUI and CLI auto-detect the same hardware and don't drift.
+        return DeviceDiscovery.preferredCaptureDevice(from: devices.availableDevices)
     }
 
     // MARK: - Preview
