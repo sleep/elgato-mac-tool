@@ -143,6 +143,10 @@ public final class CaptureEngine: NSObject {
 
     private let captureQueue = DispatchQueue(label: "capture.output", qos: .userInteractive)
     private var device: AVCaptureDevice?
+    /// Keeps the capture device pinned to the target frame rate via CoreMediaIO —
+    /// AVFoundation's frame-duration API can't drive the hardware rate on UVC cards
+    /// like the HD60X. Owned here so its lifetime tracks the active device.
+    private let frameRateController = CMIOFrameRateController()
     private var isRunning = false
     private(set) public var isPreviewing = false
     // recordingFormatDesc is read from the encoder callback queue and written from both
@@ -318,47 +322,38 @@ public final class CaptureEngine: NSObject {
         pinFrameRate(on: device, targetFPS: targetFPS)
     }
 
-    /// Lock the device to a fixed frame rate.
+    /// Drive the device to a fixed frame rate.
     ///
-    /// Two subtleties, both learned the hard way on the HD60X:
-    ///  1. We reuse the advertised range's OWN minFrameDuration verbatim. Building
-    ///     1/targetFPS ourselves fails: this device's "60fps" is really
-    ///     1000000/60000240 (≈60.00024fps), so an exact CMTime(1, 60) isn't in the
-    ///     supported set and setActiveVideoMinFrameDuration throws an *NSException*
-    ///     (uncatchable by Swift do/catch → hard crash).
-    ///  2. This must be called AFTER captureSession.startRunning(). Pinning before
-    ///     the session starts gets reset when the session negotiates the stream, so
-    ///     the device falls back to its slowest rate (25fps). Calling it again once
-    ///     the session is live is what actually sticks — this is effectively what
-    ///     Elgato's own app does that we weren't.
+    /// The real lever is CoreMediaIO's `kCMIOStreamPropertyFrameRate` (see
+    /// `CMIOFrameRate`): on the HD60X, AVFoundation's frame-duration API is accepted
+    /// but can't make a passive source produce more frames, so the device sits at
+    /// 25fps until this device-global property is set — the same thing Elgato's app
+    /// does. Must be called AFTER `captureSession.startRunning()`, once the stream
+    /// exists and the session's own negotiation has settled.
+    ///
+    /// We still set `activeVideoMin/MaxFrameDuration` afterward as a belt-and-braces
+    /// ceiling so the AVFoundation pipeline agrees on the cadence. Note: we reuse the
+    /// advertised range's OWN minFrameDuration verbatim — building `CMTime(1, 60)`
+    /// ourselves throws an uncatchable NSException because this device's "60fps" is
+    /// really 60.00024fps and an exact 1/60 isn't in its supported set.
     private func pinFrameRate(on device: AVCaptureDevice, targetFPS: Double) {
+        // 1. The one that actually changes the hardware rate. Use the self-healing
+        //    controller (not a one-shot set): the DAL plugin resets the rate to 25fps
+        //    during stream-start, so we must re-assert until it sticks.
+        frameRateController.start(deviceUniqueID: device.uniqueID, targetFPS: targetFPS)
+
+        // 2. Align the AVFoundation view of the cadence to match.
         let ranges = device.activeFormat.videoSupportedFrameRateRanges
         guard let target = ranges.min(by: {
             abs($0.maxFrameRate - targetFPS) < abs($1.maxFrameRate - targetFPS)
         }) else { return }
-
-        func fps(_ t: CMTime) -> Double { t.isValid && t.value != 0 ? Double(t.timescale) / Double(t.value) : 0 }
-        print("[Capture][diag] BEFORE pin: activeFormat ranges=\(ranges.map { String(format: "%.3f", $0.maxFrameRate) }), " +
-              "min=\(String(format: "%.3f", fps(device.activeVideoMinFrameDuration)))fps, " +
-              "max=\(String(format: "%.3f", fps(device.activeVideoMaxFrameDuration)))fps")
-
         do {
             try device.lockForConfiguration()
-            // Lock a fixed cadence (min==max) so the encoder/muxer get a steady rate
-            // and the device doesn't auto-throttle under load. minFrameDuration is the
-            // shortest frame time = the range's fastest (and, for these discrete
-            // ranges, only) rate.
             device.activeVideoMinFrameDuration = target.minFrameDuration
             device.activeVideoMaxFrameDuration = target.minFrameDuration
             device.unlockForConfiguration()
-            // Read the values back: this distinguishes "API rejected/ignored our set"
-            // from "API accepted it but the device still delivers 25fps" (driver
-            // ignores frame-duration control → we'd need a different lever).
-            print("[Capture][diag] AFTER pin: tried \(String(format: "%.3f", target.maxFrameRate))fps → " +
-                  "min=\(String(format: "%.3f", fps(device.activeVideoMinFrameDuration)))fps, " +
-                  "max=\(String(format: "%.3f", fps(device.activeVideoMaxFrameDuration)))fps")
         } catch {
-            print("[Capture] Frame-rate pin failed: \(error)")
+            print("[Capture] Frame-duration alignment failed: \(error)")
         }
     }
 
@@ -535,6 +530,7 @@ public final class CaptureEngine: NSObject {
     /// Stop preview-only session.
     public func stopPreview() {
         guard isPreviewing, !isRunning else { return }
+        frameRateController.stop()
         captureSession.stopRunning()
         captureSession.beginConfiguration()
         // removeAudioOutput is called within begin/commit
@@ -670,6 +666,7 @@ public final class CaptureEngine: NSObject {
             // stays un-throttled while backgrounded.
             print("[Capture] Stopped capture, fell back to preview")
         } else {
+            frameRateController.stop()
             captureSession.stopRunning()
             isPreviewing = false
             endCaptureActivity()
