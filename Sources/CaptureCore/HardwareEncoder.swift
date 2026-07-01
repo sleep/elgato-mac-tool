@@ -91,6 +91,7 @@ public enum OutputResolution: String, CaseIterable, Identifiable, Codable, Senda
     case native = "native"
     case uhd2160 = "uhd2160"
     case qhd1440 = "qhd1440"
+    case fhd1080 = "fhd1080"
     case hd720 = "hd720"
 
     public var id: String { rawValue }
@@ -98,8 +99,9 @@ public enum OutputResolution: String, CaseIterable, Identifiable, Codable, Senda
     public var displayName: String {
         switch self {
         case .native: return "Native (match source)"
-        case .uhd2160: return "2160p / 4K (upscale)"
-        case .qhd1440: return "1440p (upscale)"
+        case .uhd2160: return "2160p / 4K"
+        case .qhd1440: return "1440p"
+        case .fhd1080: return "1080p"
         case .hd720: return "720p"
         }
     }
@@ -110,6 +112,7 @@ public enum OutputResolution: String, CaseIterable, Identifiable, Codable, Senda
         case .native: return nil
         case .uhd2160: return 2160
         case .qhd1440: return 1440
+        case .fhd1080: return 1080
         case .hd720: return 720
         }
     }
