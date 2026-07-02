@@ -192,8 +192,17 @@ final class CaptureViewModel: ObservableObject {
             if let settings = self.settings, settings.rememberLastDevice {
                 settings.lastDeviceUniqueID = newDevice?.uniqueID
             }
-            // Don't drive the engine if we're reconnecting capture
-            guard self.reconnectDeviceID == nil, !self.isReconnecting else { return }
+            // A picker change while a reconnect is in flight is a manual
+            // override: the user gave up waiting for the unplugged device and
+            // chose another. Cancel the retry loop (it's polling for a uniqueID
+            // that may never return) so the normal start path below can drive
+            // the engine to the new device. The reconnect machinery's own
+            // `selectedDevice = fresh` assignment reuses the same uniqueID, so
+            // it's filtered out by the guard above and never reaches here —
+            // meaning anything that does reach here mid-reconnect is a user pick.
+            if self.reconnectDeviceID != nil || self.isReconnecting {
+                self.cancelReconnect()
+            }
             // Hot-swap the live pipeline. startCapture/startPreview both pick up
             // the new selectedDevice and tear the previous session down via the
             // engine. Without this branch, switching the picker mid-capture is
@@ -578,10 +587,7 @@ final class CaptureViewModel: ObservableObject {
     func stopCapture() {
         // Cancel any in-flight reconnect — without this, a pending retry would
         // fire after stop() and silently restart capture.
-        reconnectDeviceID = nil
-        reconnectAudioDeviceID = nil
-        isReconnecting = false
-        wasCapturingAtDisconnect = false
+        cancelReconnect()
 
         engine.stop()
         recording.isCapturing = false
@@ -832,6 +838,19 @@ final class CaptureViewModel: ObservableObject {
             devices.availableDevices = DeviceDiscovery.findCaptureDevices()
             devices.availableAudioDevices = DeviceDiscovery.findAudioDevices()
         }
+    }
+
+    /// Abandon an in-flight reconnect (device never returned, or the user
+    /// switched to a different source). Clears the retry state and the
+    /// disconnected overlay so the normal start path can take over. Any pending
+    /// `attemptReconnect` closure self-cancels via its `reconnectDeviceID`
+    /// guard once this nils the ID out. Does NOT touch the replay buffer.
+    private func cancelReconnect() {
+        reconnectDeviceID = nil
+        reconnectAudioDeviceID = nil
+        isReconnecting = false
+        wasCapturingAtDisconnect = false
+        devices.deviceDisconnected = false
     }
 
     /// Tear down the live pipeline and start the reconnect retry loop. Idempotent.
