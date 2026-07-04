@@ -38,9 +38,21 @@ public final class CaptureEngine: NSObject {
     }()
 
     /// Pool of BGRA pixel buffers recycled across frames so we don't allocate
-    /// 1080p surfaces 60 times per second.
+    /// 1080p surfaces 60 times per second. Shared by the effects render and the
+    /// display-format conversion — only one of them runs per frame.
     private var effectsPool: CVPixelBufferPool?
     private var effectsPoolDims: (Int, Int) = (0, 0)
+
+    /// Pixel formats that `CALayer.contents` renders correctly when handed a raw
+    /// IOSurface. Anything else (e.g. the packed-YUV frames many HDMI/UVC cards
+    /// deliver) must be converted before it reaches the live preview layer, or
+    /// Core Animation misreads the row stride and the image shears diagonally.
+    private static let displayablePixelFormats: Set<OSType> = [
+        kCVPixelFormatType_32BGRA,
+        kCVPixelFormatType_32RGBA,
+        kCVPixelFormatType_32ARGB,
+        kCVPixelFormatType_32ABGR,
+    ]
 
     /// Replace the active filter chain. Pass an empty array to disable the
     /// effects pipeline entirely (the capture queue then takes the fast path).
@@ -930,6 +942,50 @@ public final class CaptureEngine: NSObject {
 
         let width = CVPixelBufferGetWidth(source)
         let height = CVPixelBufferGetHeight(source)
+        guard let outBuffer = dequeueBGRABuffer(width: width, height: height) else { return nil }
+
+        var ci = CIImage(cvPixelBuffer: source)
+        for filter in filters {
+            filter.setValue(ci, forKey: kCIInputImageKey)
+            guard let output = filter.outputImage else { return nil }
+            ci = output
+        }
+
+        // Render in-place. Use the source's color space so colors round-trip
+        // sensibly through the BGRA intermediate.
+        let colorSpace = CVImageBufferGetColorSpace(source)?.takeUnretainedValue()
+            ?? CGColorSpace(name: CGColorSpace.sRGB)
+        context.render(ci, to: outBuffer, bounds: ci.extent, colorSpace: colorSpace)
+        return outBuffer
+    }
+
+    /// Return a frame the live preview's `CALayer` can render directly. Buffers
+    /// already in an RGB-family format (the filtered path's BGRA output, or a card
+    /// that natively delivers BGRA) pass through untouched — zero-copy. Packed-YUV
+    /// frames are converted to BGRA so Core Animation reads the stride correctly;
+    /// the encoder and replay keep the native buffer, since YUV is ideal for H.264.
+    /// Falls back to `source` on any failure — a torn frame beats a blank preview.
+    private func displayableBuffer(for source: CVPixelBuffer) -> CVPixelBuffer {
+        guard !Self.displayablePixelFormats.contains(CVPixelBufferGetPixelFormatType(source)),
+              let context = effectsContext else { return source }
+
+        let width = CVPixelBufferGetWidth(source)
+        let height = CVPixelBufferGetHeight(source)
+        guard let outBuffer = dequeueBGRABuffer(width: width, height: height) else { return source }
+
+        // CIImage applies the buffer's YCbCr→RGB matrix from its attachments, so
+        // rendering to BGRA yields correct colors regardless of the source range.
+        let colorSpace = CVImageBufferGetColorSpace(source)?.takeUnretainedValue()
+            ?? CGColorSpace(name: CGColorSpace.sRGB)
+        context.render(CIImage(cvPixelBuffer: source), to: outBuffer,
+                       bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                       colorSpace: colorSpace)
+        return outBuffer
+    }
+
+    /// Dequeue a recycled BGRA buffer of the given size, (re)creating the shared
+    /// pool when the dimensions change. Returns nil on allocation failure.
+    private func dequeueBGRABuffer(width: Int, height: Int) -> CVPixelBuffer? {
         if effectsPool == nil || effectsPoolDims != (width, height) {
             let poolAttrs: [CFString: Any] = [
                 kCVPixelBufferPoolMinimumBufferCountKey: 3
@@ -959,19 +1015,6 @@ public final class CaptureEngine: NSObject {
               let outBuffer = destination else {
             return nil
         }
-
-        var ci = CIImage(cvPixelBuffer: source)
-        for filter in filters {
-            filter.setValue(ci, forKey: kCIInputImageKey)
-            guard let output = filter.outputImage else { return nil }
-            ci = output
-        }
-
-        // Render in-place. Use the source's color space so colors round-trip
-        // sensibly through the BGRA intermediate.
-        let colorSpace = CVImageBufferGetColorSpace(source)?.takeUnretainedValue()
-            ?? CGColorSpace(name: CGColorSpace.sRGB)
-        context.render(ci, to: outBuffer, bounds: ci.extent, colorSpace: colorSpace)
         return outBuffer
     }
 
@@ -1098,9 +1141,12 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         latestRawPixelBuffer = rawPixelBuffer
         latestFrameLock.unlock()
 
-        // Only display after the first keyframe to avoid green artifacts
+        // Only display after the first keyframe to avoid green artifacts.
+        // The preview hands this straight to a CALayer, which only renders
+        // RGB-family surfaces correctly — convert here (encoder/replay keep the
+        // native buffer). No-op for BGRA sources, so the encoder path is unchanged.
         if receivedFirstKeyframe {
-            onFrameForDisplay?(pixelBuffer)
+            onFrameForDisplay?(displayableBuffer(for: pixelBuffer))
         }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
