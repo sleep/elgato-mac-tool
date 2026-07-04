@@ -237,8 +237,15 @@ public final class Recorder {
 
             // Watchdog timeout for finishWriting. If finalisation hangs (disk stall, FUSE
             // wedge, sandbox glitch), we cancel the writer and resume with failure rather
-            // than blocking the awaiter forever.
-            let finishTimeoutSeconds: Double = 10
+            // than blocking the awaiter forever. The deadline is computed at finalize time
+            // (see finishTimeout(appendSeconds:)) so it can scale with how throttled the
+            // process currently is — the append phase we just ran is a live measurement of
+            // that throttle factor.
+
+            // Wall-clock stamp taken before the pumps start feeding. `Finalizing replay`
+            // fires only once both inputs have drained, so (finalize - writeStart) is how
+            // long the append phase took under whatever CPU budget the OS is giving us.
+            let writeStart = DispatchTime.now()
 
             return await withCheckedContinuation { continuation in
                 let stateLock = NSLock()
@@ -260,7 +267,13 @@ public final class Recorder {
                     stateLock.unlock()
                     guard canFinalize else { return }
 
-                    print("[Recorder] Finalizing replay (\(videoWritten) video, \(audioWritten) audio)")
+                    // How long the append phase took, in wall-clock seconds. Under Game Mode
+                    // (fullscreen game in front) this app is heavily deprioritised, so this
+                    // can be tens of seconds for work that's normally sub-second.
+                    let appendSeconds = Double(DispatchTime.now().uptimeNanoseconds - writeStart.uptimeNanoseconds) / 1_000_000_000
+                    let finishTimeoutSeconds = finishTimeout(appendSeconds: appendSeconds)
+
+                    print("[Recorder] Finalizing replay (\(videoWritten) video, \(audioWritten) audio) — append took \(String(format: "%.1f", appendSeconds))s, finish timeout \(String(format: "%.0f", finishTimeoutSeconds))s")
 
                     // Schedule the watchdog before invoking finishWriting so we cover the
                     // entire finalisation window. cancelWriting() is documented thread-safe.
@@ -366,6 +379,36 @@ public final class Recorder {
     }
 
     public var isRecording: Bool { isWriting }
+
+    // MARK: - Watchdog policy
+
+    /// Decide how long to wait for `finishWriting` before assuming a genuine hang
+    /// (disk wedge / FUSE stall) and cancelling the save.
+    ///
+    /// `appendSeconds` is how long the append phase just took. Normally it's < 1s;
+    /// while a Game-Mode game is in the foreground this process is throttled and it
+    /// can run to 30–40s. finishWriting (flush AAC + write the moov atom) is throttled
+    /// by the same factor, so a fixed deadline that works at full speed discards a
+    /// perfectly good — just slow — save.
+    ///
+    /// The trade-off you're setting: a *longer* timeout rescues throttled saves that
+    /// would otherwise be thrown away (the 397795s-gap bug you already fixed proves
+    /// how much a lost replay hurts), but it also means a genuinely wedged disk blocks
+    /// the awaiter for longer before we give up. Pick the relationship between observed
+    /// append time and finalize budget, plus a floor (fast path) and a ceiling (hard cap).
+    ///
+    /// - Parameter appendSeconds: wall-clock duration of the append phase.
+    /// - Returns: seconds to allow finishWriting before cancelling.
+    private static func finishTimeout(appendSeconds: Double) -> Double {
+        // finishWriting (flush AAC + write the moov atom) is much cheaper than the
+        // append phase, so budget it as a fraction of the observed append time. At
+        // full speed appendSeconds is < 1s and the floor governs; while throttled
+        // behind a Game-Mode game it scales up so a slow-but-progressing finalize
+        // isn't discarded. The ceiling still bails on a genuinely wedged disk.
+        let floor = 10.0     // fast path — never wait less than this
+        let ceiling = 120.0  // hard cap — never block the awaiter longer than this
+        return min(max(appendSeconds * 0.5, floor), ceiling)
+    }
 
     // MARK: - Helpers
 
