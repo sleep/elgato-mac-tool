@@ -964,14 +964,27 @@ public final class CaptureEngine: NSObject {
     /// that natively delivers BGRA) pass through untouched — zero-copy. Packed-YUV
     /// frames are converted to BGRA so Core Animation reads the stride correctly;
     /// the encoder and replay keep the native buffer, since YUV is ideal for H.264.
-    /// Falls back to `source` on any failure — a torn frame beats a blank preview.
-    private func displayableBuffer(for source: CVPixelBuffer) -> CVPixelBuffer {
-        guard !Self.displayablePixelFormats.contains(CVPixelBufferGetPixelFormatType(source)),
-              let context = effectsContext else { return source }
+    ///
+    /// Returns nil when conversion is needed but fails. Callers must then SKIP the
+    /// display update (the layer keeps the previous frame). Never hand the raw YUV
+    /// buffer to the layer as a "better than nothing" fallback: CALayer misreads
+    /// its stride, and the image shears and drifts sideways until the surface is
+    /// replaced — far worse than one invisibly dropped preview frame.
+    private func displayableBuffer(for source: CVPixelBuffer) -> CVPixelBuffer? {
+        guard !Self.displayablePixelFormats.contains(CVPixelBufferGetPixelFormatType(source)) else {
+            return source
+        }
+        guard let context = effectsContext else {
+            logDisplayConversionFailure("no Metal CIContext")
+            return nil
+        }
 
         let width = CVPixelBufferGetWidth(source)
         let height = CVPixelBufferGetHeight(source)
-        guard let outBuffer = dequeueBGRABuffer(width: width, height: height) else { return source }
+        guard let outBuffer = dequeueBGRABuffer(width: width, height: height) else {
+            logDisplayConversionFailure("BGRA buffer dequeue failed (\(width)x\(height))")
+            return nil
+        }
 
         // CIImage applies the buffer's YCbCr→RGB matrix from its attachments, so
         // rendering to BGRA yields correct colors regardless of the source range.
@@ -1013,9 +1026,23 @@ public final class CaptureEngine: NSObject {
         var destination: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &destination) == kCVReturnSuccess,
               let outBuffer = destination else {
+            // A wedged pool would otherwise fail every subsequent frame — drop it
+            // so the next frame rebuilds from scratch instead.
+            effectsPool = nil
+            effectsPoolDims = (0, 0)
             return nil
         }
         return outBuffer
+    }
+
+    /// Failures here are per-frame (up to 60/s) — log the first and then once
+    /// every 600 so a persistent failure is visible without flooding the console.
+    private var displayConversionFailureCount = 0
+    private func logDisplayConversionFailure(_ reason: String) {
+        displayConversionFailureCount += 1
+        if displayConversionFailureCount == 1 || displayConversionFailureCount % 600 == 0 {
+            print("[Preview] Display conversion failed (\(displayConversionFailureCount)x): \(reason) — frame skipped")
+        }
     }
 
     private func makeFormatDescription(parameterSets psData: Data) -> CMFormatDescription? {
@@ -1145,8 +1172,8 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         // The preview hands this straight to a CALayer, which only renders
         // RGB-family surfaces correctly — convert here (encoder/replay keep the
         // native buffer). No-op for BGRA sources, so the encoder path is unchanged.
-        if receivedFirstKeyframe {
-            onFrameForDisplay?(displayableBuffer(for: pixelBuffer))
+        if receivedFirstKeyframe, let displayBuffer = displayableBuffer(for: pixelBuffer) {
+            onFrameForDisplay?(displayBuffer)
         }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
