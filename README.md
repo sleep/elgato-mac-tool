@@ -40,7 +40,7 @@ The icon is drawn in code (`Sources/ElgatoCaptureGUI/AppIconRenderer.swift`) —
 To build the installer yourself:
 
 ```bash
-scripts/package-app.sh 0.1.1   # → dist/Elgato Capture.app, dist/ElgatoCapture-0.1.1.dmg
+scripts/package-app.sh 0.1.2   # → dist/Elgato Capture.app, dist/ElgatoCapture-0.1.2.dmg
 ```
 
 ## Requirements
