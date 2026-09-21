@@ -19,6 +19,18 @@ Originally lived inside [obs-remote](https://github.com/) as `elgatomactool/`; e
 - **Mobile remote (PWA)** — the GUI ships an embedded web server that hosts a Framework7-based PWA. Scan the QR, control everything from your phone over LAN, PSK-protected.
 - **Apple Silicon native** — NV12 throughout, no color conversion, typical CPU < 5% on M2.
 
+## Install
+
+Download `ElgatoCapture-<version>.dmg` from [Releases](https://github.com/sleep/elgato-mac-tool/releases), open it and drag **Elgato Capture** into **Applications**.
+
+The app isn't signed with a developer certificate, so the first launch needs a right-click → **Open** (or `xattr -dr com.apple.quarantine "/Applications/Elgato Capture.app"`). It's a universal binary (Apple Silicon + Intel).
+
+To build the installer yourself:
+
+```bash
+scripts/package-app.sh 0.1.0   # → dist/Elgato Capture.app, dist/ElgatoCapture-0.1.0.dmg
+```
+
 ## Requirements
 
 - macOS 13 or later

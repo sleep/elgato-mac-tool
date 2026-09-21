@@ -352,6 +352,18 @@ final class RemoteController: ObservableObject {
 
     // MARK: - Asset loading
 
+    /// SwiftPM's `Bundle.module` only looks next to the executable's bundle root, which
+    /// can't hold files in a signed .app — so the packaged app keeps the resource bundle
+    /// in Contents/Resources and we check there first.
+    private static let resourceBundle: Bundle = {
+        let name = "ElgatoCapture_elgato-capture-gui.bundle"
+        if let url = Bundle.main.resourceURL?.appendingPathComponent(name),
+           let bundle = Bundle(url: url) {
+            return bundle
+        }
+        return Bundle.module
+    }()
+
     private static func loadAssets() -> [String: (Data, String)] {
         let files: [(String, String)] = [
             ("index.html", "text/html; charset=utf-8"),
@@ -363,8 +375,8 @@ final class RemoteController: ObservableObject {
         for (name, type) in files {
             let base = (name as NSString).deletingPathExtension
             let ext = (name as NSString).pathExtension
-            if let url = Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "WebRoot")
-                ?? Bundle.module.url(forResource: base, withExtension: ext),
+            if let url = resourceBundle.url(forResource: base, withExtension: ext, subdirectory: "WebRoot")
+                ?? resourceBundle.url(forResource: base, withExtension: ext),
                let data = try? Data(contentsOf: url) {
                 result[name] = (data, type)
             }

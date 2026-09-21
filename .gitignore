@@ -24,3 +24,6 @@ DerivedData/
 *~
 .vscode/
 .idea/
+
+# Packaging output
+dist/
