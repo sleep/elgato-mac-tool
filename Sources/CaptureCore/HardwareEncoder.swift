@@ -176,6 +176,9 @@ public struct AudioSample {
 public final class HardwareEncoder {
 
     private var session: VTCompressionSession?
+    /// `session` is swapped by start()/stop() on the caller's thread and read by encode() on
+    /// the capture queue.
+    private let sessionLock = NSLock()
     /// Source frame dimensions (what the capture device delivers).
     private var sourceWidth: Int32
     private var sourceHeight: Int32
@@ -238,13 +241,13 @@ public final class HardwareEncoder {
             print("[Encoder] Bitrate property ignored for \(codec.displayName) (rate is profile-fixed)")
             return
         }
-        guard session != nil else { return }
+        guard let session = currentSession() else { return }
         if modeChanged {
             // Quality <-> average-bitrate switch needs a fresh session.
             try? start()
             return
         }
-        guard !isConstantQuality, let session else {
+        guard !isConstantQuality else {
             print("[Encoder] Constant-quality (Max) mode — no average-bitrate target")
             return
         }
@@ -261,11 +264,10 @@ public final class HardwareEncoder {
     }
 
     public func start() throws {
-        // Stop existing session if any
-        if let session {
+        // Stop existing session if any. Unpublish it first so encode() stops feeding it.
+        if let session = swapSession(nil) {
             VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
             VTCompressionSessionInvalidate(session)
-            self.session = nil
         }
 
         var sessionOut: VTCompressionSession?
@@ -317,8 +319,6 @@ public final class HardwareEncoder {
             throw CaptureError.encoderCreationFailed(status)
         }
 
-        self.session = session
-
         // Properties shared by every codec. ProRes is intra-only so the keyframe
         // settings are inert there but harmless to set.
         var properties: [(CFString, Any)] = [
@@ -350,13 +350,19 @@ public final class HardwareEncoder {
         }
 
         VTCompressionSessionPrepareToEncodeFrames(session)
+
+        // Publish only once fully configured. When upgrading from preview the capture queue is
+        // already delivering frames, and one submitted while properties are still being set
+        // deadlocks against the encoder service's first-frame XPC callback.
+        _ = swapSession(session)
+
         let rateLabel = codec == .h264 ? (isConstantQuality ? "max (constant quality)" : "\(bitrate/1_000_000)Mbps") : "lossless"
         let scaleLabel = outputResolution == .native ? "" : " (scaled from \(sourceWidth)x\(sourceHeight))"
         print("[Encoder] \(codec.displayName) encoder started (\(encWidth)x\(encHeight)\(scaleLabel) @ \(fps)fps, \(rateLabel), \(usedHW))")
     }
 
     public func encode(_ pixelBuffer: CVPixelBuffer, presentationTime: CMTime, duration: CMTime) {
-        guard let session else { return }
+        guard let session = currentSession() else { return }
 
         VTCompressionSessionEncodeFrame(
             session,
@@ -370,20 +376,32 @@ public final class HardwareEncoder {
     }
 
     public func forceKeyframe() {
-        guard let session else { return }
+        guard let session = currentSession() else { return }
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 1 as CFTypeRef)
         encoderQueue.asyncAfter(deadline: .now() + 0.05) { [self] in
-            guard let session = self.session else { return }
+            guard let session = self.currentSession() else { return }
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: (self.fps * 2) as CFTypeRef)
         }
     }
 
     public func stop() {
-        guard let session else { return }
+        guard let session = swapSession(nil) else { return }
         VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
         VTCompressionSessionInvalidate(session)
-        self.session = nil
         print("[Encoder] Stopped")
+    }
+
+    private func currentSession() -> VTCompressionSession? {
+        sessionLock.withLock { session }
+    }
+
+    /// Replaces the published session, returning the previous one for the caller to retire.
+    private func swapSession(_ new: VTCompressionSession?) -> VTCompressionSession? {
+        sessionLock.withLock {
+            let old = session
+            session = new
+            return old
+        }
     }
 
     // MARK: - Private
