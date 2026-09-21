@@ -377,6 +377,9 @@ final class CaptureViewModel: ObservableObject {
 
     /// Try to reconnect to the last-used device and optionally start capture.
     func autoConnectLastDevice() {
+        // On first launch the permission prompt is still up when this runs; starting
+        // now would only fail. checkCameraAccess() calls back in once access is granted.
+        guard devices.cameraAuthorized else { return }
         guard let settings, settings.rememberLastDevice,
               let savedID = settings.lastDeviceUniqueID else { return }
 
@@ -401,7 +404,11 @@ final class CaptureViewModel: ObservableObject {
                 Task { @MainActor in
                     self.devices.cameraAuthorized = granted
                     if granted {
+                        // Drop any "not granted" error raised while the prompt was up
+                        // (e.g. Start Capture pressed), then do the deferred auto-connect.
+                        self.recording.errorMessage = nil
                         self.refreshDevices()
+                        self.autoConnectLastDevice()
                     } else {
                         self.recording.errorMessage = "Camera access denied. Grant access in System Settings > Privacy & Security > Camera."
                     }
