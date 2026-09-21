@@ -88,10 +88,11 @@ final class Updater: ObservableObject {
         alert.messageText = "Elgato Capture \(release.version) is available"
         let notes = release.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         alert.informativeText = "You have \(currentVersion)."
-            + (notes.isEmpty ? "" : "\n\n" + String(notes.prefix(600)))
         alert.addButton(withTitle: "Install and Relaunch")
         alert.addButton(withTitle: "Later")
         alert.addButton(withTitle: "Skip This Version")
+        // Last: this lays the alert out, so anything added afterwards would undo it.
+        if !notes.isEmpty { ReleaseNotes.show(notes, after: alert.informativeText, in: alert) }
 
         NSApp.activate(ignoringOtherApps: true)
         switch alert.runModal() {
