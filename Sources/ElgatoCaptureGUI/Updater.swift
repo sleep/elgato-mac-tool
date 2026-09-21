@@ -17,6 +17,9 @@ final class Updater: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
+    /// Version that's downloaded and staged, waiting for the app to quit.
+    @Published private(set) var pendingVersion: String?
+    private var stagedUpdate: URL?
 
     static let repo = "sleep/elgato-mac-tool"
     private static let checkInterval: TimeInterval = 24 * 60 * 60
@@ -74,6 +77,11 @@ final class Updater: ObservableObject {
             }
             if !userInitiated && settings.skippedUpdateVersion == release.version { return }
             phase = .idle
+            if pendingVersion == release.version {
+                if userInitiated { offerPending(release.version) }
+                return
+            }
+            discardPendingUpdate()  // superseded by a newer release
             offer(release, currentVersion: currentVersion)
         } catch {
             print("[Updater] Check failed: \(error)")
@@ -89,6 +97,7 @@ final class Updater: ObservableObject {
         let notes = release.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         alert.informativeText = "You have \(currentVersion)."
         alert.addButton(withTitle: "Install and Relaunch")
+        alert.addButton(withTitle: "Install on Quit")
         alert.addButton(withTitle: "Later")
         alert.addButton(withTitle: "Skip This Version")
         // Last: this lays the alert out, so anything added afterwards would undo it.
@@ -97,19 +106,46 @@ final class Updater: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            Task { await install(release) }
-        case .alertThirdButtonReturn:
+            Task { await install(release, onQuit: false) }
+        case .alertSecondButtonReturn:
+            Task { await install(release, onQuit: true) }
+        case Self.fourthButtonReturn:
             settings.skippedUpdateVersion = release.version
         default:
             break
         }
     }
 
+    /// NSAlert only names the first three; the rest count up from there.
+    private static let fourthButtonReturn = NSApplication.ModalResponse(
+        rawValue: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1)
+
+    /// "Check for Updates…" while an update is already staged for quit.
+    private func offerPending(_ version: String) {
+        let alert = NSAlert()
+        alert.messageText = "Elgato Capture \(version) is ready to install"
+        alert.informativeText = "It will be installed when you quit."
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Install and Relaunch Now")
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        guard !isRecording() else {
+            showMessage("Recording in progress",
+                        "Stop the recording first — installing the update relaunches the app.",
+                        style: .warning)
+            return
+        }
+        if installPendingUpdate(relaunch: true) { NSApp.terminate(nil) }
+    }
+
     // MARK: - Installing
 
-    private func install(_ release: Release) async {
+    /// `onQuit` stages the update quietly and leaves the swap for `installPendingUpdate`, so it
+    /// never interrupts a session; otherwise the app quits and relaunches straight away.
+    private func install(_ release: Release, onQuit: Bool) async {
         guard phase == .idle, let currentVersion else { return }
-        guard !isRecording() else {
+        guard onQuit || !isRecording() else {
             showMessage("Recording in progress",
                         "Stop the recording first — installing the update relaunches the app.",
                         style: .warning)
@@ -117,7 +153,7 @@ final class Updater: ObservableObject {
         }
 
         let bundleURL = Bundle.main.bundleURL
-        showProgressWindow()
+        if !onQuit { showProgressWindow() }
         defer { closeProgressWindow() }
 
         do {
@@ -133,19 +169,54 @@ final class Updater: ObservableObject {
             let staged = try await Self.stage(dmg: dmg, replacing: bundleURL,
                                               newerThan: currentVersion)
 
+            if onQuit {
+                stagedUpdate = staged
+                pendingVersion = release.version
+                phase = .idle
+                print("[Updater] \(release.version) staged — installs on quit")
+                return
+            }
+
             // Re-check: the download took a while and recording may have started since.
             guard !isRecording() else {
                 try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
                 throw UpdateError.recordingStarted
             }
-            try Self.launchSwapScript(staged: staged, target: bundleURL)
+            try Self.launchSwapScript(staged: staged, target: bundleURL, relaunch: true)
             NSApp.terminate(nil)
         } catch {
             print("[Updater] Install failed: \(error)")
             phase = .idle
             closeProgressWindow()
+            // A background download failing isn't worth a modal over a recording.
+            if onQuit && isRecording() { return }
             showMessage("Update failed", error.localizedDescription, style: .warning)
         }
+    }
+
+    /// Hands a staged update to the swap script, which waits for this process to exit. Called
+    /// from applicationWillTerminate; returns whether an install was started.
+    @discardableResult
+    func installPendingUpdate(relaunch: Bool = false) -> Bool {
+        guard let staged = stagedUpdate else { return false }
+        stagedUpdate = nil
+        pendingVersion = nil
+        do {
+            // The staging area is a temp directory, so it may be gone after a long uptime.
+            guard FileManager.default.fileExists(atPath: staged.path) else { return false }
+            try Self.launchSwapScript(staged: staged, target: Bundle.main.bundleURL, relaunch: relaunch)
+            return true
+        } catch {
+            print("[Updater] Install on quit failed: \(error)")
+            return false
+        }
+    }
+
+    private func discardPendingUpdate() {
+        guard let staged = stagedUpdate else { return }
+        try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
+        stagedUpdate = nil
+        pendingVersion = nil
     }
 
     /// The swap is a rename in the bundle's parent directory, so that has to be ours
@@ -240,21 +311,22 @@ final class Updater: ObservableObject {
 
     /// We can't replace our own bundle while running, so a detached shell waits for this
     /// process to exit, swaps the bundles (restoring the old one if the move fails) and
-    /// relaunches. Paths go in as positional arguments so they never need quoting.
-    private nonisolated static func launchSwapScript(staged: URL, target: URL) throws {
+    /// optionally relaunches. Paths go in as positional arguments so they never need quoting.
+    private nonisolated static func launchSwapScript(staged: URL, target: URL, relaunch: Bool) throws {
         let script = """
-        pid="$1"; staged="$2"; target="$3"; backup="$target.old-$pid"
+        pid="$1"; staged="$2"; target="$3"; relaunch="$4"; backup="$target.old-$pid"
         while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
         if mv "$target" "$backup"; then
             if mv "$staged" "$target"; then rm -rf "$backup"; else mv "$backup" "$target"; fi
         fi
         rm -rf "$(dirname "$staged")"
-        open "$target"
+        if [ "$relaunch" = 1 ]; then open "$target"; fi
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script, "sh",
-                             String(ProcessInfo.processInfo.processIdentifier), staged.path, target.path]
+                             String(ProcessInfo.processInfo.processIdentifier), staged.path, target.path,
+                             relaunch ? "1" : "0"]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

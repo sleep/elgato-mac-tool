@@ -24,7 +24,8 @@ struct SettingsView: View {
                         Divider()
                         Toggle("Check for updates automatically", isOn: $settings.checkForUpdatesAutomatically)
                         HStack {
-                            Text("Version \(version)")
+                            Text(updater.pendingVersion.map { "Version \(version) — \($0) installs on quit" }
+                                 ?? "Version \(version)")
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Check Now") { updater.checkNow() }
