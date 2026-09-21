@@ -2,7 +2,7 @@
   <img src="docs/icon.png" alt="Elgato Capture icon" width="128">
 </p>
 
-# Elgato Mac Tool
+<h1 align="center">Elgato Mac Tool</h1>
 
 ![UI](ui.png)
 
