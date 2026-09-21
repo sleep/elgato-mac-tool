@@ -29,12 +29,18 @@ Download `ElgatoCapture-<version>.dmg` from [Releases](https://github.com/sleep/
 
 The app isn't signed with a developer certificate, so the first launch needs a right-click → **Open** (or `xattr -dr com.apple.quarantine "/Applications/Elgato Capture.app"`). It's a universal binary (Apple Silicon + Intel).
 
+### Updates
+
+The app checks [GitHub Releases](https://github.com/sleep/elgato-mac-tool/releases) once a day on launch (toggle in **Preferences → General**) and on demand via **Check for Updates…** in the app and menu-bar menus. When a newer version exists it offers to install it: the DMG is downloaded, checked against the SHA-256 GitHub publishes for the asset, and the app inside is verified before it replaces the running copy and relaunches. It never installs while a recording is in progress. The only request made is to `api.github.com`.
+
+Self-update needs the packaged app in a folder you can write to (e.g. `/Applications`); `swift run` builds don't update.
+
 The icon is drawn in code (`Sources/ElgatoCaptureGUI/AppIconRenderer.swift`) — the packaging script renders it into the `.icns`, the app uses it for the Dock, and the mobile remote serves a full-bleed variant as its home-screen icon.
 
 To build the installer yourself:
 
 ```bash
-scripts/package-app.sh 0.1.0   # → dist/Elgato Capture.app, dist/ElgatoCapture-0.1.0.dmg
+scripts/package-app.sh 0.1.1   # → dist/Elgato Capture.app, dist/ElgatoCapture-0.1.1.dmg
 ```
 
 ## Requirements

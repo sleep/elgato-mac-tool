@@ -75,6 +75,9 @@ final class AppSettings: ObservableObject {
         static let previewHueDegrees = "previewHueDegrees"
         static let previewFilter = "previewFilter"
         static let visualEffectsEnabled = "visualEffectsEnabled"
+        static let checkForUpdatesAutomatically = "checkForUpdatesAutomatically"
+        static let lastUpdateCheck = "lastUpdateCheck"
+        static let skippedUpdateVersion = "skippedUpdateVersion"
     }
 
     private let defaults = UserDefaults.standard
@@ -157,6 +160,24 @@ final class AppSettings: ObservableObject {
     /// so installed PWAs keep working across sessions.
     @Published var remotePSK: String {
         didSet { defaults.set(remotePSK, forKey: Keys.remotePSK) }
+    }
+
+    // MARK: - Updates
+
+    /// Check GitHub for a newer release on launch (at most once a day).
+    @Published var checkForUpdatesAutomatically: Bool {
+        didSet { defaults.set(checkForUpdatesAutomatically, forKey: Keys.checkForUpdatesAutomatically) }
+    }
+
+    var lastUpdateCheck: Date? {
+        get { defaults.object(forKey: Keys.lastUpdateCheck) as? Date }
+        set { defaults.set(newValue, forKey: Keys.lastUpdateCheck) }
+    }
+
+    /// Version the user chose "Skip This Version" for; automatic checks stay quiet about it.
+    var skippedUpdateVersion: String? {
+        get { defaults.string(forKey: Keys.skippedUpdateVersion) }
+        set { defaults.set(newValue, forKey: Keys.skippedUpdateVersion) }
     }
 
     // MARK: - Preview adjustments
@@ -286,5 +307,6 @@ final class AppSettings: ObservableObject {
             self.previewFilter = .none
         }
         self.visualEffectsEnabled = defaults.object(forKey: Keys.visualEffectsEnabled) as? Bool ?? true
+        self.checkForUpdatesAutomatically = defaults.object(forKey: Keys.checkForUpdatesAutomatically) as? Bool ?? true
     }
 }

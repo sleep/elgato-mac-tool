@@ -8,6 +8,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem
     private let viewModel: CaptureViewModel
     private let settings: AppSettings
+    private let updater: Updater
     private var cancellables: Set<AnyCancellable> = []
     private var updateTimer: Timer?
 
@@ -17,9 +18,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let capturingDot: NSImage
     private let recordingDot: NSImage
 
-    init(viewModel: CaptureViewModel, settings: AppSettings) {
+    init(viewModel: CaptureViewModel, settings: AppSettings, updater: Updater) {
         self.viewModel = viewModel
         self.settings = settings
+        self.updater = updater
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.idleDot = StatusBarController.makeStatusDot(color: .systemGray)
         self.capturingDot = StatusBarController.makeStatusDot(color: .systemGreen)
@@ -224,6 +226,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         prefsItem.target = self
         menu.addItem(prefsItem)
 
+        // Only the packaged .app can update itself; hide the item in dev builds.
+        if updater.isAvailable {
+            let updateItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+            updateItem.target = self
+            menu.addItem(updateItem)
+        }
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Elgato Capture", action: #selector(quitApp), keyEquivalent: "q")
@@ -301,6 +310,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             window.makeKeyAndOrderFront(nil)
         }
         NotificationCenter.default.post(name: .showRemoteSheet, object: nil)
+    }
+
+    @objc private func checkForUpdates() {
+        updater.checkNow()
     }
 
     @objc private func quitApp() {

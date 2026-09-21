@@ -3,6 +3,7 @@ import CaptureCore
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var updater: Updater
 
     var body: some View {
         ScrollView {
@@ -19,6 +20,17 @@ struct SettingsView: View {
                     Toggle("Start minimized (window hidden)", isOn: $settings.startMinimized)
                     Toggle("Remember last device", isOn: $settings.rememberLastDevice)
                     Toggle("Auto-start capture on launch", isOn: $settings.autoStartCapture)
+                    if let version = updater.currentVersion {
+                        Divider()
+                        Toggle("Check for updates automatically", isOn: $settings.checkForUpdatesAutomatically)
+                        HStack {
+                            Text("Version \(version)")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Check Now") { updater.checkNow() }
+                                .disabled(updater.phase != .idle)
+                        }
+                    }
                 }
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)

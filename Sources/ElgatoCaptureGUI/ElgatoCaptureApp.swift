@@ -7,7 +7,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = AppSettings()
     private(set) lazy var viewModel = CaptureViewModel(settings: settings)
     private(set) lazy var remoteController = RemoteController(viewModel: viewModel, settings: settings)
-    private(set) lazy var statusBarController = StatusBarController(viewModel: viewModel, settings: settings)
+    private(set) lazy var updater = Updater(settings: settings) { [weak self] in
+        self?.viewModel.recording.isRecording ?? false
+    }
+    private(set) lazy var statusBarController = StatusBarController(viewModel: viewModel, settings: settings, updater: updater)
     private var didFinishSetup = false
     private var didHandleStartupHide = false
     private var isPerformingStartupHide = false
@@ -52,6 +55,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if settings.remoteEnabled {
             remoteController.start()
         }
+
+        updater.checkInBackgroundIfDue()
     }
 
     /// Hide the SwiftUI window that gets auto-opened on launch. Called from the
@@ -106,6 +111,10 @@ struct ElgatoCaptureApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 960, height: 620)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { appDelegate.updater.checkNow() }
+                    .disabled(!appDelegate.updater.isAvailable)
+            }
             CommandMenu("View") {
                 ForEach(AppSettings.OverlayStat.allCases) { stat in
                     Toggle(stat.label, isOn: overlayStatBinding(for: stat))
@@ -117,6 +126,7 @@ struct ElgatoCaptureApp: App {
             SettingsView()
                 .environmentObject(appDelegate.settings)
                 .environmentObject(appDelegate.viewModel)
+                .environmentObject(appDelegate.updater)
         }
     }
 
