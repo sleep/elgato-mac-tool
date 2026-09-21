@@ -26,7 +26,7 @@ final class RemoteController: ObservableObject {
     /// asset closure so it can serve them from any thread without touching the actor.
     private let assets: [String: (Data, String)]
     private var iconCache: [Int: Data] = [:]
-    private lazy var baseIcon: NSImage = AppIconRenderer.makeIcon()
+    private lazy var baseIcon: NSImage = AppIconRenderer.makeIcon(fullBleed: true)
 
     init(viewModel: CaptureViewModel, settings: AppSettings) {
         self.viewModel = viewModel

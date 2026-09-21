@@ -1,9 +1,15 @@
 import AppKit
 
-/// Generates a vaporwave-styled NSImage for the dock icon using Core Graphics.
+/// Draws the app icon with Core Graphics: a blue→violet gradient tile with a white
+/// viewfinder and a record dot. Used for the Dock icon at runtime, the .icns in the
+/// packaged app (scripts/export-icon.swift) and the mobile remote's PWA icon.
 enum AppIconRenderer {
 
-    static func makeIcon() -> NSImage {
+    /// - Parameter fullBleed: `false` follows the macOS icon grid — an 824pt rounded
+    ///   tile centred in a 1024pt canvas, with a drop shadow in the margin. `true`
+    ///   fills the whole square with no rounding or shadow, for platforms that apply
+    ///   their own mask (iOS / Android home-screen icons).
+    static func makeIcon(fullBleed: Bool = false) -> NSImage {
         let pt: CGFloat = 512
         let px = 1024
 
@@ -26,10 +32,8 @@ enum AppIconRenderer {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = gctx
 
-        let ctx = gctx.cgContext
         // NSBitmapImageRep already maps 512pt → 1024px; no manual scale needed.
-
-        drawIcon(ctx: ctx, size: pt)
+        drawIcon(ctx: gctx.cgContext, size: pt, fullBleed: fullBleed)
 
         NSGraphicsContext.restoreGraphicsState()
 
@@ -40,138 +44,120 @@ enum AppIconRenderer {
 
     // MARK: - Drawing (CG native coords: origin = bottom-left, Y up)
 
-    private static func drawIcon(ctx: CGContext, size: CGFloat) {
-        let w = size, h = size
-        let cr: CGFloat = w * 0.22
-        let cx = w / 2
+    private static func drawIcon(ctx: CGContext, size: CGFloat, fullBleed: Bool) {
+        // All measurements below are in units of Apple's 1024pt icon grid.
+        let u = size / 1024
+        let tile = fullBleed
+            ? CGRect(x: 0, y: 0, width: size, height: size)
+            : CGRect(x: 100 * u, y: 100 * u, width: 824 * u, height: 824 * u)
+        let tilePath = fullBleed ? CGPath(rect: tile, transform: nil) : squircle(in: tile)
+        let centre = CGPoint(x: tile.midX, y: tile.midY)
+        let side = tile.width
 
-        // Horizon at 55% from bottom (= 45% from top visually)
-        let horizonY = h * 0.55
-        let sunR = w * 0.22
+        // Drop shadow, cast by a flat fill that the gradient then covers.
+        if !fullBleed {
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: -12 * u), blur: 28 * u,
+                          color: rgba(0, 0, 0, 0.35))
+            ctx.addPath(tilePath)
+            ctx.setFillColor(rgb(0.30, 0.22, 0.80))
+            ctx.fillPath()
+            ctx.restoreGState()
+        }
 
-        let cardRect = CGRect(x: 0, y: 0, width: w, height: h)
-        let cardPath = CGPath(roundedRect: cardRect, cornerWidth: cr, cornerHeight: cr, transform: nil)
-
-        // --- Clipped interior ---
+        // --- Tile ---
         ctx.saveGState()
-        ctx.addPath(cardPath)
+        ctx.addPath(tilePath)
         ctx.clip()
 
-        // Background
-        ctx.setFillColor(rgb(0.05, 0.02, 0.1))
-        ctx.fill(cardRect)
-
-        // Radial glow behind sun
-        if let grad = makeGrad([rgba(1, 0.43, 0.78, 0.4), rgba(0.61, 0.35, 0.71, 0.15), rgba(0, 0, 0, 0)]) {
-            ctx.saveGState()
-            ctx.addEllipse(in: CGRect(x: w * 0.1, y: horizonY - h * 0.1, width: w * 0.8, height: h * 0.6))
-            ctx.clip()
-            ctx.drawRadialGradient(grad,
-                                   startCenter: CGPoint(x: cx, y: horizonY), startRadius: 0,
-                                   endCenter: CGPoint(x: cx, y: horizonY), endRadius: w * 0.45,
-                                   options: .drawsAfterEndLocation)
-            ctx.restoreGState()
+        // Base gradient: lighter at the top, like the system icons.
+        if let g = makeGrad([rgb(0.38, 0.66, 1.00), rgb(0.36, 0.36, 0.96), rgb(0.42, 0.16, 0.78)]) {
+            ctx.drawLinearGradient(g,
+                                   start: CGPoint(x: tile.midX, y: tile.maxY),
+                                   end: CGPoint(x: tile.midX, y: tile.minY), options: [])
         }
 
-        // Sun bands — sun sits ABOVE horizon, so bands go from horizonY upward
-        let sunGrad = makeGrad([rgb(1, 0.65, 0), rgb(1, 0.55, 0.3), rgb(1, 0.43, 0.78)])
-        for band in 0..<5 {
-            let t0 = CGFloat(band) / 5
-            let t1 = CGFloat(band + 1) / 5
-            let gap: CGFloat = 0.02 + CGFloat(band) * 0.03
-
-            // In CG coords: band bottom is closer to horizon, top is farther up
-            let bandBot = horizonY + sunR * t0 + sunR * gap
-            let bandTop = horizonY + sunR * t1
-            guard bandBot < bandTop else { continue }
-
-            let path = CGMutablePath()
-            var started = false
-            let n = 80
-            // Bottom edge of band (left to right)
-            for s in 0...n {
-                let x = cx - sunR + CGFloat(s) / CGFloat(n) * sunR * 2
-                let dx = x - cx
-                guard abs(dx) <= sunR else { continue }
-                let circleY = horizonY + sqrt(sunR * sunR - dx * dx)
-                let y = min(circleY, bandTop)
-                guard y >= bandBot else { continue }
-                if !started { path.move(to: CGPoint(x: x, y: bandBot)); started = true }
-                else { path.addLine(to: CGPoint(x: x, y: bandBot)) }
-            }
-            // Top edge of band (right to left, clipped to circle)
-            for s in stride(from: n, through: 0, by: -1) {
-                let x = cx - sunR + CGFloat(s) / CGFloat(n) * sunR * 2
-                let dx = x - cx
-                guard abs(dx) <= sunR else { continue }
-                let circleY = horizonY + sqrt(sunR * sunR - dx * dx)
-                let y = min(circleY, bandTop)
-                guard y >= bandBot else { continue }
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-            path.closeSubpath()
-
-            if let g = sunGrad {
-                ctx.saveGState()
-                ctx.addPath(path)
-                ctx.clip()
-                // Gradient: orange at bottom (horizon) → pink at top
-                ctx.drawLinearGradient(g,
-                    start: CGPoint(x: cx, y: horizonY),
-                    end: CGPoint(x: cx, y: horizonY + sunR), options: [])
-                ctx.restoreGState()
-            }
+        // Soft light from the top-left corner.
+        if let g = makeGrad([rgba(1, 1, 1, 0.30), rgba(1, 1, 1, 0)]) {
+            let origin = CGPoint(x: tile.minX + side * 0.2, y: tile.maxY)
+            ctx.drawRadialGradient(g, startCenter: origin, startRadius: 0,
+                                   endCenter: origin, endRadius: side * 0.85, options: [])
         }
 
-        // Horizon line
-        ctx.setStrokeColor(rgba(0, 0.96, 1, 0.9))
-        ctx.setLineWidth(w * 0.012)
-        ctx.move(to: CGPoint(x: 0, y: horizonY))
-        ctx.addLine(to: CGPoint(x: w, y: horizonY))
+        // Glyph: viewfinder corners + record dot, lifted off the tile by a soft shadow.
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -side * 0.012), blur: side * 0.035,
+                      color: rgba(0.10, 0.04, 0.35, 0.45))
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+
+        let half = side * 0.27      // centre → outer edge of the viewfinder
+        let arm = side * 0.15       // length of each bracket arm
+        let radius = side * 0.075   // bracket corner rounding
+        ctx.setStrokeColor(rgb(1, 1, 1))
+        ctx.setLineWidth(side * 0.05)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        for (sx, sy) in [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] as [(CGFloat, CGFloat)] {
+            let corner = CGPoint(x: centre.x + sx * half, y: centre.y + sy * half)
+            let armEndX = CGPoint(x: corner.x - sx * arm, y: corner.y)
+            let armEndY = CGPoint(x: corner.x, y: corner.y - sy * arm)
+            ctx.move(to: armEndX)
+            ctx.addArc(tangent1End: corner, tangent2End: armEndY, radius: radius)
+            ctx.addLine(to: armEndY)
+        }
         ctx.strokePath()
 
-        // Vertical grid lines — converge from bottom edge to vanishing point at horizon
-        let vp = CGPoint(x: cx, y: horizonY)
-        for i in 0..<13 {
-            let t = CGFloat(i) / 12
-            let bx = t * w
-            let d = abs(t - 0.5) * 2
-            ctx.setStrokeColor(rgba(0, 0.96, 1, max(0.08, 0.45 - d * 0.4)))
-            ctx.setLineWidth(w * 0.006)
-            ctx.move(to: vp)
-            ctx.addLine(to: CGPoint(x: bx, y: 0)) // bottom edge
-            ctx.strokePath()
-        }
+        // Record dot, ringed in white so the red never touches the blue.
+        let dotR = side * 0.115
+        ctx.setFillColor(rgb(1, 1, 1))
+        ctx.fillEllipse(in: CGRect(x: centre.x - dotR, y: centre.y - dotR,
+                                   width: dotR * 2, height: dotR * 2).insetBy(dx: -side * 0.03, dy: -side * 0.03))
+        ctx.endTransparencyLayer()
+        ctx.restoreGState()
 
-        // Horizontal grid lines — below horizon, spread toward bottom
-        for i in 1...8 {
-            let t = pow(CGFloat(i) / 8, 2)
-            let y = horizonY - t * horizonY // from horizon down toward y=0
-            let prog = (horizonY - y) / horizonY
-            let lx = cx - prog * cx
-            let rx = cx + prog * cx
-            ctx.setStrokeColor(rgba(0, 0.96, 1, max(0.08, t * 0.55)))
-            ctx.setLineWidth(w * 0.006)
-            ctx.move(to: CGPoint(x: lx, y: y))
-            ctx.addLine(to: CGPoint(x: rx, y: y))
-            ctx.strokePath()
-        }
-
-        ctx.restoreGState() // end card clip
-
-        // --- Gradient outline (unclipped) ---
-        if let g = makeGrad([rgb(1, 0.43, 0.78), rgb(0.61, 0.35, 0.71), rgb(0, 0.96, 1)]) {
+        if let g = makeGrad([rgb(1.00, 0.45, 0.40), rgb(0.93, 0.16, 0.27)]) {
             ctx.saveGState()
-            ctx.setLineWidth(w * 0.025)
-            ctx.addPath(cardPath)
-            ctx.replacePathWithStrokedPath()
+            ctx.addEllipse(in: CGRect(x: centre.x - dotR, y: centre.y - dotR,
+                                      width: dotR * 2, height: dotR * 2))
             ctx.clip()
-            ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: h), end: CGPoint(x: w, y: 0), options: [])
+            ctx.drawLinearGradient(g,
+                                   start: CGPoint(x: centre.x, y: centre.y + dotR),
+                                   end: CGPoint(x: centre.x, y: centre.y - dotR), options: [])
             ctx.restoreGState()
         }
+
+        // Rim light along the top edge (the outer half of the stroke is clipped away).
+        if !fullBleed, let g = makeGrad([rgba(1, 1, 1, 0.45), rgba(1, 1, 1, 0)]) {
+            ctx.setLineWidth(6 * u)
+            ctx.addPath(tilePath)
+            ctx.replacePathWithStrokedPath()
+            ctx.clip()
+            ctx.drawLinearGradient(g,
+                                   start: CGPoint(x: tile.midX, y: tile.maxY),
+                                   end: CGPoint(x: tile.midX, y: tile.midY), options: [])
+        }
+
+        ctx.restoreGState() // end tile clip
     }
 
     // MARK: - Helpers
+
+    /// Superellipse (|x|⁵ + |y|⁵ = 1) — a close match for the continuous-corner
+    /// shape of macOS icons, which a plain rounded rect isn't.
+    private static func squircle(in rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        let n: CGFloat = 5
+        let steps = 360
+        for i in 0..<steps {
+            let t = CGFloat(i) / CGFloat(steps) * 2 * .pi
+            let c = cos(t), s = sin(t)
+            let x = rect.midX + rect.width / 2 * (c < 0 ? -1 : 1) * pow(abs(c), 2 / n)
+            let y = rect.midY + rect.height / 2 * (s < 0 ? -1 : 1) * pow(abs(s), 2 / n)
+            if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        path.closeSubpath()
+        return path
+    }
 
     private static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGColor {
         CGColor(red: r, green: g, blue: b, alpha: 1)

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/icon.png" alt="Elgato Capture icon" width="128">
+</p>
+
 # Elgato Mac Tool
 
 ![UI](ui.png)
@@ -24,6 +28,8 @@ Originally lived inside [obs-remote](https://github.com/) as `elgatomactool/`; e
 Download `ElgatoCapture-<version>.dmg` from [Releases](https://github.com/sleep/elgato-mac-tool/releases), open it and drag **Elgato Capture** into **Applications**.
 
 The app isn't signed with a developer certificate, so the first launch needs a right-click → **Open** (or `xattr -dr com.apple.quarantine "/Applications/Elgato Capture.app"`). It's a universal binary (Apple Silicon + Intel).
+
+The icon is drawn in code (`Sources/ElgatoCaptureGUI/AppIconRenderer.swift`) — the packaging script renders it into the `.icns`, the app uses it for the Dock, and the mobile remote serves a full-bleed variant as its home-screen icon.
 
 To build the installer yourself:
 
